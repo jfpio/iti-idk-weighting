@@ -65,8 +65,7 @@ def main():
     parser.add_argument('--use_random_dir', action='store_true', help='use random direction', default=False)
     parser.add_argument('--device', type=int, default=0, help='device')
     parser.add_argument('--seed', type=int, default=42, help='seed')
-    parser.add_argument('--judge_name', type=str, required=False)
-    parser.add_argument('--info_name', type=str, required=False)
+    parser.add_argument('--sequential_loading', action='store_true', default=True, help='unload main model before loading judge models to save memory')
     parser.add_argument('--instruction_prompt', default='default', help='instruction prompt for truthfulqa benchmarking, "default" or "informative"', type=str, required=False)
 
     args = parser.parse_args()
@@ -198,8 +197,7 @@ def main():
             interventions=None, 
             intervention_fn=None, 
             instruction_prompt=args.instruction_prompt,
-            judge_name=args.judge_name, 
-            info_name=args.info_name,
+            sequential_loading=args.sequential_loading,
             separate_kl_device='cuda',
             orig_model=model
         )

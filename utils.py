@@ -588,11 +588,9 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
                 questions = tqa_run_probs(questions, ENGINE_MAP[mdl], mdl, model=llama_model, tokenizer=llama_tokenizer, preset=preset, device=device, cache_dir=cache_dir, verbose=False, interventions=interventions, intervention_fn=intervention_fn, instruction_prompt=instruction_prompt, many_shot_prefix=many_shot_prefix)
                 utilities.save_questions(questions, output_path)
             
-            # Calculate CE loss and KL divergence before potential model unloading
-            ce_loss = run_ce_loss(mdl, model=llama_model, tokenizer=llama_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn)
-            kl_wrt_orig = run_kl_wrt_orig(mdl, model=llama_model, tokenizer=llama_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn, separate_kl_device=separate_kl_device, orig_model=orig_model)
-            model_metrics[mdl] = {'ce_loss': ce_loss, 'kl_wrt_orig': kl_wrt_orig}
-            print(f"Calculated CE loss ({ce_loss:.4f}) and KL divergence ({kl_wrt_orig:.4f}) for {mdl}")
+            # Skip CE loss and KL divergence calculations to save time
+            model_metrics[mdl] = {'ce_loss': np.nan, 'kl_wrt_orig': np.nan}
+            print(f"Skipped CE loss and KL divergence for {mdl} (time optimization)")
             
             # Sequential loading: Clean up main model after answer generation
             if sequential_loading and ('judge' in metric_names or 'info' in metric_names):
@@ -667,18 +665,15 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
                                                     'level_1': 'Metric',
                                                     0: 'Value'})
 
-    # filter to most informative metrics
+    # filter to critical ITI metrics only (time optimization)
     results = results[results['Metric'].isin(['MC1', 'MC2',
-                                              'bleu acc',
-                                              'rouge1 acc',
-                                              'BLEURT acc',
                                               'GPT-judge acc',
                                               'GPT-info acc'])]
     results = pd.pivot_table(results, 'Value', 'Model', 'Metric')
 
-    # calculate cross entropy loss on owt and kl wrt to original unedited on owt
-    results['CE Loss'] = np.nan
-    results['KL wrt Orig'] = np.nan
+    # Skip CE loss and KL divergence columns (time optimization)
+    # results['CE Loss'] = np.nan
+    # results['KL wrt Orig'] = np.nan
 
     for model_key in model_names_for_cleanup: 
         # if model_key not in questions.columns:
@@ -698,8 +693,9 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
             ce_loss = np.nan
             kl_wrt_orig = np.nan
 
-        results.loc[model_key, 'CE Loss'] = ce_loss
-        results.loc[model_key, 'KL wrt Orig'] = kl_wrt_orig
+        # Skip CE loss and KL divergence results assignment (time optimization)
+        # results.loc[model_key, 'CE Loss'] = ce_loss
+        # results.loc[model_key, 'KL wrt Orig'] = kl_wrt_orig
 
     # save results
     results.to_csv(summary_path, index=False)

@@ -425,15 +425,18 @@ def tqa_run_probs(frame, engine, tag, preset, model=None, tokenizer=None, verbos
 
 def run_ce_loss(model_key, model=None, tokenizer=None, device='cuda', interventions={}, intervention_fn=None, num_samples=100): 
 
-    # load owt text
+    # load C4 dataset from allenai/c4
     # note this is tokenized with llama tokenizer
-    dataset = load_dataset("stas/openwebtext-10k")['train']
-    dataset = dataset.shuffle()
-    dataset = dataset.select(range(num_samples))
+    dataset = load_dataset("allenai/c4", "en", split='train', streaming=True)
+    dataset = dataset.shuffle(seed=42)
 
-    # tokenize
-    owt = dataset.map(lambda x: {'input_ids': torch.tensor(tokenizer(x['text'], return_tensors='pt')['input_ids'][:,:128])})
-    owt.set_format(type='torch', columns=['input_ids'])
+    # collect num_samples samples from streaming dataset and tokenize
+    owt_samples = []
+    for i, sample in enumerate(dataset):
+        if i >= num_samples:
+            break
+        input_ids = torch.tensor(tokenizer(sample['text'], return_tensors='pt')['input_ids'][:,:128])
+        owt_samples.append({'input_ids': input_ids})
     
     # # define intervention
     # def id(head_output, layer_name):
@@ -447,11 +450,10 @@ def run_ce_loss(model_key, model=None, tokenizer=None, device='cuda', interventi
     #     intervention_fn = partial(intervention_fn, start_edit_location=0)
 
     losses = []
-    rand_idxs = np.random.choice(len(owt), num_samples, replace=False).tolist()
     with torch.no_grad(): 
-        for i in tqdm(rand_idxs, desc="run_ce_loss"):
+        for i in tqdm(range(len(owt_samples)), desc="run_ce_loss"):
 
-            input_ids = owt[i]['input_ids'][:, :128].to(device)
+            input_ids = owt_samples[i]['input_ids'][:, :128].to(device)
             
             # with TraceDict(model, layers_to_intervene, edit_output=intervention_fn) as ret:
             _, loss = model({'input_ids': input_ids, 'labels': input_ids})
@@ -465,15 +467,18 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
 
     assert 'llama' in model_key or 'alpaca' in model_key or 'vicuna' in model_key, 'model must be llama model'
 
-    # load owt text
+    # load C4 dataset from allenai/c4
     # note this is tokenized with llama tokenizer
-    dataset = load_dataset("stas/openwebtext-10k")['train']
-    dataset = dataset.shuffle()
-    dataset = dataset.select(range(num_samples))
+    dataset = load_dataset("allenai/c4", "en", split='train', streaming=True)
+    dataset = dataset.shuffle(seed=42)
 
-    # tokenize
-    owt = dataset.map(lambda x: {'input_ids': torch.tensor(tokenizer(x['text'], return_tensors='pt')['input_ids'][:,:128])})
-    owt.set_format(type='torch', columns=['input_ids'])
+    # collect num_samples samples from streaming dataset and tokenize
+    owt_samples = []
+    for i, sample in enumerate(dataset):
+        if i >= num_samples:
+            break
+        input_ids = torch.tensor(tokenizer(sample['text'], return_tensors='pt')['input_ids'][:,:128])
+        owt_samples.append({'input_ids': input_ids})
     
     # # define intervention
     # def id(head_output, layer_name):
@@ -487,7 +492,6 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
     #     intervention_fn = partial(intervention_fn, start_edit_location=0)
 
     kl_divs = []
-    rand_idxs = np.random.choice(len(owt), num_samples, replace=False).tolist()
 
     if separate_kl_device is not None: 
         # orig_model = AutoModelForCausalLM.from_pretrained(ENGINE_MAP[model_key], torch_dtype=torch.float16, low_cpu_mem_usage=True)
@@ -495,8 +499,8 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
 
     with torch.no_grad(): 
         epsilon = 1e-10  # Small value to avoid division by zero
-        for i in tqdm(rand_idxs, desc="run_kl_wrt_orig"):
-            input_ids = owt[i]['input_ids'][:, :128].to(device)
+        for i in tqdm(range(len(owt_samples)), desc="run_kl_wrt_orig"):
+            input_ids = owt_samples[i]['input_ids'][:, :128].to(device)
             if separate_kl_device is not None: 
                 orig_logits = orig_model(input_ids.to('cuda'))
                 orig_logits = orig_logits.logits.cpu().type(torch.float32)
@@ -534,10 +538,12 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
     Outputs a pd dataframe with summary values
     """
     questions = utilities.load_questions(filename=input_path)
-
     # Store model names and tokenizers for potential cleanup
     model_names_for_cleanup = list(models.keys())
     loaded_tokenizers = {}
+    
+    # Store CE loss and KL divergence metrics per model for sequential loading
+    model_metrics = {}
     
     for mdl in list(models.keys()): 
 
@@ -581,6 +587,12 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
             if 'mc' in metric_names:
                 questions = tqa_run_probs(questions, ENGINE_MAP[mdl], mdl, model=llama_model, tokenizer=llama_tokenizer, preset=preset, device=device, cache_dir=cache_dir, verbose=False, interventions=interventions, intervention_fn=intervention_fn, instruction_prompt=instruction_prompt, many_shot_prefix=many_shot_prefix)
                 utilities.save_questions(questions, output_path)
+            
+            # Calculate CE loss and KL divergence before potential model unloading
+            ce_loss = run_ce_loss(mdl, model=llama_model, tokenizer=llama_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn)
+            kl_wrt_orig = run_kl_wrt_orig(mdl, model=llama_model, tokenizer=llama_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn, separate_kl_device=separate_kl_device, orig_model=orig_model)
+            model_metrics[mdl] = {'ce_loss': ce_loss, 'kl_wrt_orig': kl_wrt_orig}
+            print(f"Calculated CE loss ({ce_loss:.4f}) and KL divergence ({kl_wrt_orig:.4f}) for {mdl}")
             
             # Sequential loading: Clean up main model after answer generation
             if sequential_loading and ('judge' in metric_names or 'info' in metric_names):
@@ -673,23 +685,18 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
         #     warnings.warn("Answers missing for {0}!".format(model_key), stacklevel=2)
         #     continue
         if 'llama' in model_key or 'alpaca' in model_key or 'vicuna' in model_key:
-            # Handle case where model was unloaded for sequential loading
-            if sequential_loading and ('judge' in metric_names or 'info' in metric_names):
-                print(f"Sequential loading was used - skipping CE loss and KL divergence for {model_key}")
-                print("These metrics require the main model to be loaded, which conflicts with memory optimization.")
+            # Use pre-calculated metrics from model processing loop
+            if model_key in model_metrics:
+                ce_loss = model_metrics[model_key]['ce_loss']
+                kl_wrt_orig = model_metrics[model_key]['kl_wrt_orig']
+            else:
+                print(f"No stored metrics found for {model_key} - using NaN values")
                 ce_loss = np.nan
                 kl_wrt_orig = np.nan
-            else:
-                # Model should still be available
-                current_model = models.get(model_key)
-                current_tokenizer = loaded_tokenizers.get(model_key)
-                if current_model is not None and current_tokenizer is not None:
-                    ce_loss = run_ce_loss(model_key, model=current_model, tokenizer=current_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn)
-                    kl_wrt_orig = run_kl_wrt_orig(model_key, model=current_model, tokenizer=current_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn, separate_kl_device=separate_kl_device, orig_model=orig_model)
-                else:
-                    print(f"Model or tokenizer not available for {model_key} - skipping CE/KL metrics")
-                    ce_loss = np.nan
-                    kl_wrt_orig = np.nan
+        else:
+            # Non-llama models don't support CE/KL metrics in this implementation
+            ce_loss = np.nan
+            kl_wrt_orig = np.nan
 
         results.loc[model_key, 'CE Loss'] = ce_loss
         results.loc[model_key, 'KL wrt Orig'] = kl_wrt_orig
@@ -771,10 +778,8 @@ def get_interventions_dict(top_heads, probes, tuning_activations, num_heads, use
 def get_separated_activations(labels, head_wise_activations): 
 
     # separate activations by question
-    # Find path relative to the location of utils.py
-    import os
-    utils_dir = os.path.dirname(__file__)
-    csv_path = os.path.join(utils_dir, 'TruthfulQA', 'TruthfulQA.csv')
+    from dataset_utils.path_utils import get_default_dataset_path
+    csv_path = get_default_dataset_path()
     dataset = load_csv_as_mc2_dataset(csv_path)
     actual_labels = []
     for i in range(len(dataset)):

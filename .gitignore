@@ -161,7 +161,6 @@ cython_debug/
 
 features
 directions
-datasets
 TruthfulQA
 validation/results_dump
 validation/splits

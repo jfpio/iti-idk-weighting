@@ -16,6 +16,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import sys
 sys.path.append('../')
 from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions
+from dataset_utils.path_utils import get_default_dataset_path
 
 HF_NAMES = {
     # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
@@ -50,7 +51,7 @@ def main():
     np.random.seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    df = pd.read_csv('../TruthfulQA/TruthfulQA.csv')
+    df = pd.read_csv(get_default_dataset_path())
 
     # create model
     model_name = HF_NAMES[args.model_prefix + args.model_name]

@@ -18,6 +18,7 @@ sys.path.append('../')
 # Specific pyvene imports
 from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions
 from interveners import wrapper, Collector, ITI_Intervener
+from dataset_utils.path_utils import get_default_dataset_path
 import pyvene as pv
 
 HF_NAMES = {
@@ -75,7 +76,7 @@ def main():
     np.random.seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    df = pd.read_csv('../TruthfulQA/TruthfulQA.csv')
+    df = pd.read_csv(get_default_dataset_path())
     
     # get two folds using numpy
     fold_idxs = np.array_split(np.arange(len(df)), args.num_fold)

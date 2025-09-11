@@ -624,7 +624,7 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
             except Exception as err:
                 print(err)
 
-    for model_key in list(models.keys()): 
+    for model_key in model_names_for_cleanup: 
 
         for metric in metric_names: 
             if metric == 'mc':

@@ -27,9 +27,10 @@ def get_dataset_path(dataset_type: DATASET_TYPES) -> str:
     if not relative_path or relative_path.strip() == '':
         raise ValueError(f"Path for dataset type {dataset_type} is not configured (empty)")
     
-    # Get the project root directory (where this function is called from)
-    # Assume we're always called from the project root /workspace/honest_llama
-    project_root = os.getcwd()
+    # Get the project root directory by finding the location of this module
+    # dataset_utils/path_utils.py is in dataset_utils/, so project root is parent dir
+    module_dir = os.path.dirname(os.path.abspath(__file__))  # .../dataset_utils
+    project_root = os.path.dirname(module_dir)  # .../honest_llama (project root)
     
     # Handle both relative and absolute paths
     if os.path.isabs(relative_path):

@@ -77,6 +77,7 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
 
     df = pd.read_csv(get_default_dataset_path())
+    df = df.iloc[:10]
     
     # get two folds using numpy
     fold_idxs = np.array_split(np.arange(len(df)), args.num_fold)

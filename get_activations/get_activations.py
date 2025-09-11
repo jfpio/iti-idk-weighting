@@ -16,6 +16,7 @@ from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 from utils import get_llama_activations_pyvene, tokenized_tqa, tokenized_tqa_gen, tokenized_tqa_gen_end_q
 from interveners import wrapper, Collector, ITI_Intervener
 import pyvene as pv
+from dataset_utils.load_dataset import load_csv_as_mc2_dataset, load_csv_as_gen_dataset
 
 HF_NAMES = {
     # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
@@ -52,13 +53,13 @@ def main():
     device = "cuda"
 
     if args.dataset_name == "tqa_mc2": 
-        dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
+        dataset = load_csv_as_mc2_dataset("../TruthfulQA/TruthfulQA.csv")
         formatter = tokenized_tqa
     elif args.dataset_name == "tqa_gen": 
-        dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
+        dataset = load_csv_as_gen_dataset("../TruthfulQA/TruthfulQA.csv")
         formatter = tokenized_tqa_gen
     elif args.dataset_name == 'tqa_gen_end_q': 
-        dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
+        dataset = load_csv_as_gen_dataset("../TruthfulQA/TruthfulQA.csv")
         formatter = tokenized_tqa_gen_end_q
     else: 
         raise ValueError("Invalid dataset name")

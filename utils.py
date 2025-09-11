@@ -21,6 +21,8 @@ from sklearn.linear_model import LogisticRegression
 import pickle
 from functools import partial
 import gc
+from dataset_utils.load_dataset import load_csv_as_mc2_dataset
+
 
 from truthfulqa import utilities, models, metrics
 from truthfulqa.configs import BEST_COL, ANSWER_COL, INCORRECT_COL
@@ -537,7 +539,7 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
     model_names_for_cleanup = list(models.keys())
     loaded_tokenizers = {}
     
-    for mdl in models.keys(): 
+    for mdl in list(models.keys()): 
 
         # gpt-3
         if mdl in ['ada', 'babbage', 'curie', 'davinci']:  # gpt-3 models
@@ -612,7 +614,7 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
             except Exception as err:
                 print(err)
 
-    for model_key in models.keys(): 
+    for model_key in list(models.keys()): 
 
         for metric in metric_names: 
             if metric == 'mc':
@@ -769,7 +771,11 @@ def get_interventions_dict(top_heads, probes, tuning_activations, num_heads, use
 def get_separated_activations(labels, head_wise_activations): 
 
     # separate activations by question
-    dataset=load_dataset('truthful_qa', 'multiple_choice')['validation']
+    # Find path relative to the location of utils.py
+    import os
+    utils_dir = os.path.dirname(__file__)
+    csv_path = os.path.join(utils_dir, 'TruthfulQA', 'TruthfulQA.csv')
+    dataset = load_csv_as_mc2_dataset(csv_path)
     actual_labels = []
     for i in range(len(dataset)):
         actual_labels.append(dataset[i]['mc2_targets']['labels'])
@@ -819,10 +825,11 @@ def run_hf_truth_judge(model_key, frame, device='cuda'):
         frame[col_name] = np.nan
     
     # Load HuggingFace truth judge model
-    print("Loading truth judge model...")
+    print(f"Loading truth judge model on {device}...")
+    device_map = {"": device} if device != 'cpu' else None
     truth_model = AutoModelForCausalLM.from_pretrained(
         "allenai/truthfulqa-truth-judge-llama2-7B", 
-        device_map="auto",
+        device_map=device_map,
         dtype=torch.float16,  # Use half precision to save memory
         trust_remote_code=True
     )
@@ -888,10 +895,11 @@ def run_hf_info_judge(model_key, frame, device='cuda'):
         frame[col_name] = np.nan
     
     # Load HuggingFace info judge model
-    print("Loading info judge model...")
+    print(f"Loading info judge model on {device}...")
+    device_map = {"": device} if device != 'cpu' else None
     info_model = AutoModelForCausalLM.from_pretrained(
         "allenai/truthfulqa-info-judge-llama2-7B", 
-        device_map="auto",
+        device_map=device_map,
         dtype=torch.float16,  # Use half precision to save memory
         trust_remote_code=True
     )

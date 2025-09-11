@@ -17,7 +17,7 @@ def main():
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    model = AutoModelForCausalLM.from_pretrained(args.model_path, torch_dtype=torch.float16)
+    model = AutoModelForCausalLM.from_pretrained(args.model_path, dtype=torch.float16)
     
     tokenizer.push_to_hub(f"{args.username}/honest_{args.model_name}")
     model.push_to_hub(f"{args.username}/honest_{args.model_name}")

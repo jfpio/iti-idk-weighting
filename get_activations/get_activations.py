@@ -8,7 +8,6 @@ import pickle
 import sys
 sys.path.append('../')
 
-import llama
 import pickle
 import argparse
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
@@ -49,7 +48,7 @@ def main():
     model_name_or_path = HF_NAMES[args.model_prefix + args.model_name]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, torch_dtype=torch.float16, device_map="auto")
+    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, dtype=torch.float16, device_map="auto")
     device = "cuda"
 
     if args.dataset_name == "tqa_mc2": 

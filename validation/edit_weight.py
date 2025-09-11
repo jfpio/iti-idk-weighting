@@ -16,7 +16,6 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 import sys
 sys.path.append('../')
 from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions
-import llama
 
 HF_NAMES = {
     # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
@@ -77,7 +76,7 @@ def main():
     # create model
     model_name = HF_NAMES[args.model_prefix + args.model_name]
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, device_map="auto")
+    model = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.float16, device_map="auto")
 
     # define number of layers and heads
     num_layers = model.config.num_hidden_layers

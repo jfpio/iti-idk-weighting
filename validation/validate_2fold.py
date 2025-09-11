@@ -14,7 +14,6 @@ from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM, AutoCon
 
 import sys
 sys.path.append('../')
-import llama
 
 # Specific pyvene imports
 from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions
@@ -66,6 +65,7 @@ def main():
     parser.add_argument('--device', type=int, default=0, help='device')
     parser.add_argument('--seed', type=int, default=42, help='seed')
     parser.add_argument('--sequential_loading', action='store_true', default=True, help='unload main model before loading judge models to save memory')
+    parser.add_argument('--no-sequential_loading', dest='sequential_loading', action='store_false', help='disable sequential loading (requires more GPU memory)')
     parser.add_argument('--instruction_prompt', default='default', help='instruction prompt for truthfulqa benchmarking, "default" or "informative"', type=str, required=False)
 
     args = parser.parse_args()

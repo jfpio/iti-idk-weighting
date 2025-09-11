@@ -7,11 +7,9 @@ sys.path.insert(0, "TruthfulQA")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# import llama
 from datasets import load_dataset
 from tqdm import tqdm
 import numpy as np
-# import llama
 import pandas as pd
 import warnings
 from einops import rearrange
@@ -825,7 +823,7 @@ def run_hf_truth_judge(model_key, frame, device='cuda'):
     truth_model = AutoModelForCausalLM.from_pretrained(
         "allenai/truthfulqa-truth-judge-llama2-7B", 
         device_map="auto",
-        torch_dtype=torch.float16,  # Use half precision to save memory
+        dtype=torch.float16,  # Use half precision to save memory
         trust_remote_code=True
     )
     tokenizer = AutoTokenizer.from_pretrained("allenai/truthfulqa-truth-judge-llama2-7B")
@@ -894,7 +892,7 @@ def run_hf_info_judge(model_key, frame, device='cuda'):
     info_model = AutoModelForCausalLM.from_pretrained(
         "allenai/truthfulqa-info-judge-llama2-7B", 
         device_map="auto",
-        torch_dtype=torch.float16,  # Use half precision to save memory
+        dtype=torch.float16,  # Use half precision to save memory
         trust_remote_code=True
     )
     tokenizer = AutoTokenizer.from_pretrained("allenai/truthfulqa-info-judge-llama2-7B")

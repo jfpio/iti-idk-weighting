@@ -30,8 +30,8 @@ HF_NAMES = {
     'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf',
     'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf',
     'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf',
-    'llama3_8B': 'meta-llama/Meta-Llama-3-8B',
-    'llama3_8B_instruct': 'meta-llama/Meta-Llama-3-8B-Instruct',
+    'llama3_8B': 'meta-llama/Llama-3.1-8B',
+    'llama3_8B_instruct': 'meta-llama/Llama-3.1-8B-Instruct',
     'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
     'llama3_70B_instruct': 'meta-llama/Meta-Llama-3-70B-Instruct',
 
@@ -160,7 +160,7 @@ def main():
                 "intervention": wrapper(intervener),
             })
         intervened_model = pv.IntervenableModel(pv_config, model)
-
+        
         filename = f'{args.model_prefix}{args.model_name}_seed_{args.seed}_top_{args.num_heads}_heads_alpha_{int(args.alpha)}_fold_{i}'
 
         if args.use_center_of_mass:
@@ -178,9 +178,7 @@ def main():
             interventions=None, 
             intervention_fn=None, 
             instruction_prompt=args.instruction_prompt,
-            sequential_loading=args.sequential_loading,
-            separate_kl_device='cuda',
-            orig_model=model
+            sequential_loading=args.sequential_loading
         )
 
         print(f"FOLD {i}")
@@ -191,7 +189,7 @@ def main():
     
     results = np.array(results)
     final = results.mean(axis=0)
-
+    
     # Handle case where CE Loss and KL divergence might not be available (sequential loading)
     ce_loss = final[4] if len(final) > 4 else np.nan
     kl_wrt_orig = final[5] if len(final) > 5 else np.nan

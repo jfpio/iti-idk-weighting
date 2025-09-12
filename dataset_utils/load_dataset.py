@@ -31,12 +31,14 @@ def load_csv_as_gen_dataset(csv_path):
     dataset = []
     
     for i, row in df.iterrows():
-        # Parse correct answers
+        # Parse correct and incorrect answers
         correct_answers = [ans.strip() for ans in row['Correct Answers'].split(';')]
+        incorrect_answers = [ans.strip() for ans in row['Incorrect Answers'].split(';')]
         
         dataset.append({
             'question': row['Question'],
             'correct_answers': correct_answers,
+            'incorrect_answers': incorrect_answers,
             'category': row['Category']
         })
     

@@ -57,6 +57,8 @@ def main():
     parser.add_argument('--model_prefix', type=str, default='', help='prefix to model name')
     parser.add_argument('--dataset_name', type=str, default='tqa_mc2', help='feature bank for training probes')
     parser.add_argument('--activations_dataset', type=str, default='tqa_gen_end_q', help='feature bank for calculating std along direction')
+    parser.add_argument('--condition', type=str, default=None, choices=['c0', 'c1', 'c2', 'c3'], 
+                        help='Condition subdirectory to load activations from: c0=original, c1=true-only, c2=rephrased-idk, c3=oversampled-idk')
     parser.add_argument('--num_heads', type=int, default=48, help='K, number of top heads to intervene on')
     parser.add_argument('--alpha', type=float, default=15, help='alpha, intervention strength')
     parser.add_argument("--num_fold", type=int, default=2, help="number of folds")
@@ -77,7 +79,6 @@ def main():
     torch.cuda.manual_seed_all(args.seed)
 
     df = pd.read_csv(get_default_dataset_path())
-    df = df.iloc[:10]
     
     # get two folds using numpy
     fold_idxs = np.array_split(np.arange(len(df)), args.num_fold)
@@ -99,8 +100,19 @@ def main():
     num_key_value_groups = num_heads // num_key_value_heads
 
     # load activations 
-    head_wise_activations = np.load(f"../features/{args.model_name}_{args.dataset_name}_head_wise.npy")
-    labels = np.load(f"../features/{args.model_name}_{args.dataset_name}_labels.npy")
+    if args.condition:
+        # Load from condition-specific subdirectory
+        features_dir = f"../features/{args.condition}"
+        dataset_name = "binary_samples"
+        suffix = f"{args.condition}"
+    else:
+        # Load from main features directory
+        features_dir = "../features"
+        dataset_name = args.dataset_name
+        suffix = args.dataset_name
+    
+    head_wise_activations = np.load(f"{features_dir}/{args.model_name}_{dataset_name}_{suffix}_head_wise.npy")
+    labels = np.load(f"{features_dir}/{args.model_name}_{dataset_name}_{suffix}_labels.npy")
     head_wise_activations = rearrange(head_wise_activations, 'b l (h d) -> b l h d', h = num_heads)
 
     # tuning dataset: no labels used, just to get std of activations along the direction
@@ -162,7 +174,9 @@ def main():
         intervened_model = pv.IntervenableModel(pv_config, model)
         
         filename = f'{args.model_prefix}{args.model_name}_seed_{args.seed}_top_{args.num_heads}_heads_alpha_{int(args.alpha)}_fold_{i}'
-
+        
+        if args.condition:
+            filename += f'_{args.condition}'
         if args.use_center_of_mass:
             filename += '_com'
         if args.use_random_dir:
@@ -178,7 +192,8 @@ def main():
             interventions=None, 
             intervention_fn=None, 
             instruction_prompt=args.instruction_prompt,
-            sequential_loading=args.sequential_loading
+            sequential_loading=args.sequential_loading,
+            condition=args.condition
         )
 
         print(f"FOLD {i}")
@@ -194,7 +209,5 @@ def main():
     ce_loss = final[4] if len(final) > 4 else np.nan
     kl_wrt_orig = final[5] if len(final) > 5 else np.nan
     
-    print(f'alpha: {args.alpha}, heads: {args.num_heads}, True*Info Score: {final[1]*final[0]}, True Score: {final[1]}, Info Score: {final[0]}, MC1 Score: {final[2]}, MC2 Score: {final[3]}, CE Loss: {ce_loss}, KL wrt Original: {kl_wrt_orig}')
-
 if __name__ == "__main__":
     main()

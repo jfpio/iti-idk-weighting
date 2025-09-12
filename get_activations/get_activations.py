@@ -28,8 +28,8 @@ HF_NAMES = {
     'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf', 
     'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf', 
     'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf', 
-    'llama3_8B': 'meta-llama/Meta-Llama-3-8B',
-    'llama3_8B_instruct': 'meta-llama/Meta-Llama-3-8B-Instruct',
+    'llama3_8B': 'meta-llama/Llama-3.1-8B',
+    'llama3_8B_instruct': 'meta-llama/Llama-3.1-8B-Instruct',
     'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
     'llama3_70B_instruct': 'meta-llama/Meta-Llama-3-70B-Instruct'
 }
@@ -131,22 +131,28 @@ def main():
         all_layer_wise_activations.append(layer_wise_activations[:,-1,:].copy())
         all_head_wise_activations.append(head_wise_activations.copy())
 
-    # Create output filename suffix
+    # Create output filename suffix and directory
     if args.condition:
         suffix = f"{args.condition}"
         dataset_name = "binary_samples"
+        # Create condition-specific subdirectory
+        output_dir = f'../features/{args.condition}'
+        os.makedirs(output_dir, exist_ok=True)
     else:
         suffix = args.dataset_name
         dataset_name = args.dataset_name
+        output_dir = '../features'
 
+    print(f"Saving to directory: {output_dir}")
+    
     print("Saving labels")
-    np.save(f'../features/{args.model_name}_{dataset_name}_{suffix}_labels.npy', labels)
+    np.save(f'{output_dir}/{args.model_name}_{dataset_name}_{suffix}_labels.npy', labels)
 
     print("Saving layer wise activations")
-    np.save(f'../features/{args.model_name}_{dataset_name}_{suffix}_layer_wise.npy', all_layer_wise_activations)
+    np.save(f'{output_dir}/{args.model_name}_{dataset_name}_{suffix}_layer_wise.npy', all_layer_wise_activations)
     
     print("Saving head wise activations")
-    np.save(f'../features/{args.model_name}_{dataset_name}_{suffix}_head_wise.npy', all_head_wise_activations)
+    np.save(f'{output_dir}/{args.model_name}_{dataset_name}_{suffix}_head_wise.npy', all_head_wise_activations)
 
 if __name__ == '__main__':
     main()

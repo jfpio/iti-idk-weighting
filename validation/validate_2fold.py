@@ -18,7 +18,7 @@ sys.path.append('../')
 # Specific pyvene imports
 from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions
 from interveners import wrapper, Collector, ITI_Intervener
-from dataset_utils.path_utils import get_default_dataset_path
+from dataset_utils.path_utils import get_default_dataset_path, get_dataset_path_for_name
 import pyvene as pv
 
 HF_NAMES = {
@@ -57,8 +57,8 @@ def main():
     parser.add_argument('--model_prefix', type=str, default='', help='prefix to model name')
     parser.add_argument('--dataset_name', type=str, default='tqa_mc2', help='feature bank for training probes')
     parser.add_argument('--activations_dataset', type=str, default='tqa_gen_end_q', help='feature bank for calculating std along direction')
-    parser.add_argument('--condition', type=str, default=None, choices=['c0', 'c1', 'c2', 'c3'], 
-                        help='Condition subdirectory to load activations from: c0=original, c1=true-only, c2=rephrased-idk, c3=oversampled-idk')
+    parser.add_argument('--beta', type=float, default=1.0,
+                        help='IDK weight: 0=TRUE-only, 1=original, >1=IDK-emphasized')
     parser.add_argument('--num_heads', type=int, default=48, help='K, number of top heads to intervene on')
     parser.add_argument('--alpha', type=float, default=15, help='alpha, intervention strength')
     parser.add_argument("--num_fold", type=int, default=2, help="number of folds")
@@ -78,7 +78,7 @@ def main():
     np.random.seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
-    df = pd.read_csv(get_default_dataset_path())
+    df = pd.read_csv(get_dataset_path_for_name(args.dataset_name))
     
     # get two folds using numpy
     fold_idxs = np.array_split(np.arange(len(df)), args.num_fold)
@@ -99,20 +99,9 @@ def main():
     num_key_value_heads = model.config.num_key_value_heads
     num_key_value_groups = num_heads // num_key_value_heads
 
-    # load activations 
-    if args.condition:
-        # Load from condition-specific subdirectory
-        features_dir = f"../features/{args.condition}"
-        dataset_name = "binary_samples"
-        suffix = f"{args.condition}"
-    else:
-        # Load from main features directory
-        features_dir = "../features"
-        dataset_name = args.dataset_name
-        suffix = args.dataset_name
-    
-    head_wise_activations = np.load(f"{features_dir}/{args.model_name}_{dataset_name}_{suffix}_head_wise.npy")
-    labels = np.load(f"{features_dir}/{args.model_name}_{dataset_name}_{suffix}_labels.npy")
+    # Always load activations from main features directory (same for all beta values)
+    head_wise_activations = np.load(f"../features/{args.model_name}_{args.dataset_name}_head_wise.npy")
+    labels = np.load(f"../features/{args.model_name}_{args.dataset_name}_labels.npy")
     head_wise_activations = rearrange(head_wise_activations, 'b l (h d) -> b l h d', h = num_heads)
 
     # tuning dataset: no labels used, just to get std of activations along the direction
@@ -121,7 +110,7 @@ def main():
     tuning_activations = rearrange(tuning_activations, 'b l (h d) -> b l h d', h = num_heads)
     tuning_labels = np.load(f"../features/{args.model_name}_{activations_dataset}_labels.npy")
 
-    separated_head_wise_activations, separated_labels, idxs_to_split_at = get_separated_activations(labels, head_wise_activations)
+    separated_head_wise_activations, separated_labels, flat_is_idk, idxs_to_split_at = get_separated_activations(labels, head_wise_activations, args.dataset_name)
     # run k-fold cross validation
     results = []
     for i in range(args.num_fold):
@@ -142,7 +131,7 @@ def main():
 
         # get directions
         if args.use_center_of_mass:
-            com_directions = get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels)
+            com_directions = get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels, flat_is_idk, args.beta)
         else:
             com_directions = None
         top_heads, probes = get_top_heads(train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels, num_layers, num_heads, args.seed, args.num_heads, args.use_random_dir)
@@ -175,8 +164,8 @@ def main():
         
         filename = f'{args.model_prefix}{args.model_name}_seed_{args.seed}_top_{args.num_heads}_heads_alpha_{int(args.alpha)}_fold_{i}'
         
-        if args.condition:
-            filename += f'_{args.condition}'
+        if args.beta != 1.0:
+            filename += f'_beta_{args.beta}'
         if args.use_center_of_mass:
             filename += '_com'
         if args.use_random_dir:
@@ -193,7 +182,7 @@ def main():
             intervention_fn=None, 
             instruction_prompt=args.instruction_prompt,
             sequential_loading=args.sequential_loading,
-            condition=args.condition
+            beta=args.beta
         )
 
         print(f"FOLD {i}")

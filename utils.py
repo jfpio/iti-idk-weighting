@@ -523,7 +523,7 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
 
     return np.mean(kl_divs)
 
-def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path, device='cpu', verbose=False, preset='qa', interventions={}, intervention_fn=None, cache_dir=None, separate_kl_device=None, orig_model=None, instruction_prompt="default", many_shot_prefix=None, judge_name=None, info_name=None, sequential_loading=True, condition=None): 
+def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path, device='cpu', verbose=False, preset='qa', interventions={}, intervention_fn=None, cache_dir=None, separate_kl_device=None, orig_model=None, instruction_prompt="default", many_shot_prefix=None, judge_name=None, info_name=None, sequential_loading=True, beta=None): 
     """
     Inputs:
     models: a dictionary of the form {model_name: model} where model is a HF transformer # TODO: doesn't work with models other than llama right now
@@ -727,15 +727,17 @@ def get_interventions_dict(top_heads, probes, tuning_activations, num_heads, use
         interventions[f"model.layers.{layer}.self_attn.head_out"] = sorted(interventions[f"model.layers.{layer}.self_attn.head_out"], key = lambda x: x[0])
     return interventions
 
-def get_separated_activations(labels, head_wise_activations): 
+def get_separated_activations(labels, head_wise_activations, dataset_name="tqa_mc2"): 
 
     # separate activations by question
-    from dataset_utils.path_utils import get_default_dataset_path
-    csv_path = get_default_dataset_path()
+    from dataset_utils.path_utils import get_dataset_path_for_name
+    csv_path = get_dataset_path_for_name(dataset_name)
     dataset = load_csv_as_mc2_dataset(csv_path)
     actual_labels = []
+    actual_is_idk = []
     for i in range(len(dataset)):
         actual_labels.append(dataset[i]['mc2_targets']['labels'])
+        actual_is_idk.append(dataset[i]['mc2_targets']['is_idk'])
 
     idxs_to_split_at = np.cumsum([len(x) for x in actual_labels])        
 
@@ -749,21 +751,91 @@ def get_separated_activations(labels, head_wise_activations):
     assert separated_labels == actual_labels
 
     separated_head_wise_activations = np.split(head_wise_activations, idxs_to_split_at)
+    
+    # Create a FLAT is_idk mask that matches the flat labels array
+    # This is much simpler than nested structures
+    flat_is_idk = []
+    for i in range(len(dataset)):
+        question_labels = dataset[i]['mc2_targets']['labels']     # [1,1,1,0,0,0]
+        question_is_idk = dataset[i]['mc2_targets']['is_idk']     # [True,False,True] for correct answers only
+        
+        # Create is_idk flags for all answers (correct + incorrect)
+        idk_idx = 0
+        for label in question_labels:
+            if label == 1:  # correct answer
+                flat_is_idk.append(question_is_idk[idk_idx])
+                idk_idx += 1
+            else:  # incorrect answer  
+                flat_is_idk.append(False)  # incorrect answers are not IDK
+    
+    # Convert to numpy array for easier indexing
+    flat_is_idk = np.array(flat_is_idk)
 
-    return separated_head_wise_activations, separated_labels, idxs_to_split_at
+    return separated_head_wise_activations, separated_labels, flat_is_idk, idxs_to_split_at
 
-def get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels): 
-
+def get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels, flat_is_idk=None, beta=1.0): 
+    """
+    Compute center-of-mass directions with IDK weighting.
+    
+    Args:
+        beta: Weight for IDK examples (TRUE examples always have weight=1.0)
+              beta=0 → TRUE-only, beta=1 → original, beta>1 → IDK-emphasized
+        flat_is_idk: Flat array of IDK classification matching the flat labels (optional)
+    """
     com_directions = []
 
-    for layer in tqdm(range(num_layers), desc="get_com_directions"): 
+    for layer in tqdm(range(num_layers), desc=f"get_com_directions (β={beta})"): 
         for head in range(num_heads): 
             usable_idxs = np.concatenate([train_set_idxs, val_set_idxs], axis=0)
             usable_head_wise_activations = np.concatenate([separated_head_wise_activations[i][:,layer,head,:] for i in usable_idxs], axis=0)
             usable_labels = np.concatenate([separated_labels[i] for i in usable_idxs], axis=0)
-            true_mass_mean = np.mean(usable_head_wise_activations[usable_labels == 1], axis=0)
-            false_mass_mean = np.mean(usable_head_wise_activations[usable_labels == 0], axis=0)
+            
+            # Get positive and negative activations
+            positive_mask = usable_labels == 1
+            negative_mask = usable_labels == 0
+            
+            positive_activations = usable_head_wise_activations[positive_mask]
+            negative_activations = usable_head_wise_activations[negative_mask]
+            
+            # Apply IDK weighting if metadata available
+            if flat_is_idk is not None:
+                # Get the flat indices for usable data
+                # We need to map from question indices to flat answer indices
+                flat_indices = []
+                cumsum = np.insert(np.cumsum([len(separated_labels[i]) for i in range(len(separated_labels))]), 0, 0)
+                for idx in usable_idxs:
+                    start = cumsum[idx]
+                    end = cumsum[idx + 1]
+                    flat_indices.extend(range(start, end))
+                
+                # Get is_idk flags for usable data
+                usable_is_idk = flat_is_idk[flat_indices]
+                positive_is_idk = usable_is_idk[positive_mask]
+                
+                # Print IDK statistics for testing (only for first layer-head combination to avoid spam)
+                if layer == 0 and head == 0:
+                    num_positive = len(positive_is_idk)
+                    num_idk = np.sum(positive_is_idk)
+                    num_true = num_positive - num_idk
+                    print(f"IDK Classification Stats (β={beta}): {num_idk} IDK + {num_true} TRUE = {num_positive} total positive examples")
+                
+                # Compute weights for positive examples: TRUE=1.0, IDK=β
+                positive_weights = np.array([beta if is_idk else 1.0 for is_idk in positive_is_idk])
+                
+                # Handle edge case: β=0 might create empty positive set
+                if np.sum(positive_weights) == 0:
+                    # Fallback: use tiny weight instead of zero
+                    positive_weights = np.array([1e-6 if is_idk else 1.0 for is_idk in positive_is_idk])
+                
+                # Weighted center-of-mass
+                true_mass_mean = np.average(positive_activations, axis=0, weights=positive_weights)
+            else:
+                # Original unweighted approach
+                true_mass_mean = np.mean(positive_activations, axis=0)
+            
+            false_mass_mean = np.mean(negative_activations, axis=0)
             com_directions.append(true_mass_mean - false_mass_mean)
+            
     com_directions = np.array(com_directions)
 
     return com_directions

@@ -14,14 +14,8 @@ from enum import Enum
 
 
 class IDKStyle(Enum):
-    """Different styles/tones for IDK responses"""
-    CASUAL = "casual"
-    FORMAL = "formal" 
-    ACADEMIC = "academic"
-    PROFESSIONAL = "professional"
-    CAUTIOUS = "cautious"
-    EPISTEMIC = "epistemic"  # Knowledge-focused
-    CONVERSATIONAL = "conversational"
+    """IDK response style (simplified to FORMAL only for rephrasing)"""
+    FORMAL = "formal"
 
 
 class IDKRephraser:
@@ -33,23 +27,10 @@ class IDKRephraser:
         self._init_templates()
     
     def _init_templates(self):
-        """Initialize IDK response templates by style category"""
+        """Initialize IDK response templates and detection patterns"""
         
-        # Core templates organized by style
+        # FORMAL templates for rephrasing (clean, professional alternatives)
         self.idk_templates = {
-            IDKStyle.CASUAL: [
-                "I don't know",
-                "I'm not sure",
-                "I have no idea", 
-                "I'm not certain",
-                "That's unclear to me",
-                "I can't tell",
-                "I'm unsure about that",
-                "I don't have a clue",
-                "I'm in the dark about that",
-                "I couldn't say"
-            ],
-            
             IDKStyle.FORMAL: [
                 "I cannot provide that information",
                 "I am unable to answer that question",
@@ -61,80 +42,62 @@ class IDKRephraser:
                 "That is beyond my current knowledge",
                 "I cannot comment on that matter",
                 "I am unable to provide a response"
-            ],
-            
-            IDKStyle.ACADEMIC: [
-                "The evidence is insufficient to conclude",
-                "Current data does not support a determination",
-                "That falls outside my area of expertise",
-                "Insufficient information to make a judgment", 
-                "The available evidence is inconclusive",
-                "That question exceeds my knowledge base",
-                "I lack adequate data to respond",
-                "The research on this topic is unclear to me",
-                "This is beyond my current understanding",
-                "I would need additional information to answer"
-            ],
-            
-            IDKStyle.PROFESSIONAL: [
-                "I'm not qualified to answer that",
-                "That's outside my area of expertise",
-                "I don't have sufficient information",
-                "I cannot verify that claim",
-                "That's not within my purview",
-                "I lack the expertise to comment", 
-                "I'm not authorized to provide that information",
-                "That exceeds my professional knowledge",
-                "I would defer to someone more qualified",
-                "I don't have reliable data on that"
-            ],
-            
-            IDKStyle.CAUTIOUS: [
-                "I'm not confident enough to answer",
-                "I prefer not to speculate",
-                "I don't want to guess incorrectly",
-                "I'd rather not make assumptions",
-                "I cannot answer with certainty",
-                "I'm hesitant to provide an unverified answer",
-                "I don't feel comfortable speculating",
-                "I would need more certainty to respond",
-                "I prefer to avoid unsubstantiated claims",
-                "I don't want to mislead with guesswork"
-            ],
-            
-            IDKStyle.EPISTEMIC: [
-                "That knowledge is not accessible to me",
-                "I have no epistemic access to that information",
-                "My knowledge base doesn't include that",
-                "That information is outside my cognitive reach",
-                "I lack cognitive access to that data",
-                "That's beyond my informational boundaries", 
-                "I don't have mental access to that knowledge",
-                "My understanding doesn't extend to that area",
-                "That exceeds my informational capacity",
-                "I have no cognitive pathway to that answer"
-            ],
-            
-            IDKStyle.CONVERSATIONAL: [
-                "I have no comment on that",
-                "I'd have to pass on that question",
-                "That's a mystery to me",
-                "I'm drawing a blank on that",
-                "You've got me there",
-                "I'm stumped by that question",
-                "That's over my head",
-                "I'm at a loss on that one",
-                "That's beyond me",
-                "I couldn't tell you"
             ]
         }
+        
+        # Detection patterns: all IDK phrases we need to recognize (including original dataset patterns)
+        self.detection_patterns = [
+            # Common original dataset IDK phrases
+            "I don't know",
+            "I don't know for sure",
+            "I have no comment",
+            "Unknown",
+            "I am an AI and I don't know the answer",
+            "The question is ambiguous",
+            "It is uncertain",
+            
+            # Specific examples from evaluation dataset
+            "It depends on your current location",
+            "People would disagree about the greatest show on Earth",
+            "I am not doing anything next",
+            
+            # Broader pattern categories
+            # Conditional responses
+            "It depends on",
+            "That depends on",
+            "It depends",
+            
+            # Subjective disagreement responses  
+            "People would disagree about",
+            "People would disagree",
+            "There's no consensus on",
+            "There is no consensus on",
+            "The question is subjective",
+            
+            # AI limitation responses
+            "I am not doing anything",
+            "I do not have",
+            "I cannot",
+            "I am unable to",
+            "I don't have",
+            
+            # Additional detection patterns
+            "I'm not sure",
+            "I have no idea", 
+            "I'm not certain",
+            "That's unclear to me",
+            "I can't tell",
+            "I'm unsure about that",
+            "I couldn't say"
+        ] + self.idk_templates[IDKStyle.FORMAL]  # Include formal templates for detection too
             
     def get_all_templates(self) -> List[str]:
-        """Get all IDK templates across all styles"""
-        all_templates = []
-        for style_templates in self.idk_templates.values():
-            all_templates.extend(style_templates)
-        return all_templates
+        """Get all IDK templates (FORMAL only)"""
+        return self.idk_templates[IDKStyle.FORMAL].copy()
+    
+    def get_all_detection_patterns(self) -> List[str]:
+        """Get all IDK detection patterns (templates + original dataset patterns)"""
+        return self.detection_patterns.copy()
     
     def get_templates_by_style(self, style: IDKStyle) -> List[str]:
         """Get IDK templates for a specific style"""
@@ -198,73 +161,19 @@ class IDKRephraser:
         
         return stats
     
-    def validate_semantic_equivalence(self, response: str) -> bool:
+    
+    def is_idk_response(self, response: str) -> bool:
         """
-        Basic validation that response is semantically equivalent to "I don't know"
+        Determine if a response is an IDK response using exact template matching.
         
-        Checks for key IDK indicators while avoiding false/incorrect statements
+        Args:
+            response: The response text to classify
+            
+        Returns:
+            True if the response exactly matches one of our IDK detection patterns
         """
-        response_lower = response.lower()
+        response_lower = response.lower().strip()
         
-        # Positive indicators (should contain at least one)
-        positive_indicators = [
-            "don't know", "not sure", "uncertain", "unclear", "no idea",
-            "cannot", "unable", "don't have", "lack", "insufficient",
-            "beyond", "outside", "not confident", "no comment", "unsure",
-            "mystery", "stumped", "drawing a blank", "pass on", "over my head"
-        ]
-        
-        # Negative indicators (should not contain - would make it a false statement)
-        negative_indicators = [
-            "the answer is", "it is", "definitely", "certainly", "obviously",
-            "clearly", "without doubt", "for sure", "absolutely", "indeed"
-        ]
-        
-        has_positive = any(indicator in response_lower for indicator in positive_indicators)
-        has_negative = any(indicator in response_lower for indicator in negative_indicators)
-        
-        return has_positive and not has_negative
-
-
-def demo_rephraser():
-    """Demonstrate the IDK rephraser functionality"""
-    print("=== IDK Rephraser Demo ===\n")
-    
-    rephraser = IDKRephraser(seed=42)
-    
-    # Show statistics
-    stats = rephraser.get_statistics()
-    print(f"📊 Total IDK templates available: {stats['total']}")
-    for key, value in stats.items():
-        if key != 'total':
-            print(f"   - {key}: {value}")
-    print()
-    
-    # Show samples from each style
-    print("🎭 Sample IDK responses by style:")
-    for style in IDKStyle:
-        sample = rephraser.generate_random_idk(style)
-        print(f"   {style.value.title()}: '{sample}'")
-    print()
-    
-    # Show rephrasing functionality
-    print("🔄 IDK Rephrasing Examples:")
-    original_idks = ["I don't know", "I have no comment", "I'm not sure"]
-    
-    for original in original_idks:
-        rephrased = rephraser.rephrase_idk_answer(original)
-        print(f"   Original: '{original}'")
-        print(f"   Rephrased: '{rephrased}'\n")
-    
-    # Show diverse set generation
-    print("🔄 Diverse IDK set (10 variants):")
-    diverse_set = rephraser.generate_diverse_set(10)
-    for i, response in enumerate(diverse_set, 1):
-        print(f"   {i:2d}. {response}")
-    print()
-    
-    print("✅ IDK Rephraser Demo Complete!")
-
-
-if __name__ == "__main__":
-    demo_rephraser()
+        # Check exact matches against all detection patterns
+        all_patterns = set(pattern.lower() for pattern in self.get_all_detection_patterns())
+        return response_lower in all_patterns

@@ -2,21 +2,21 @@
 """
 Subset TruthfulQA to a fast-eval split with:
   - proportionate per-category sampling
-  - target global reference-IDK rate (default 5% ± 2pp)
+  - target global reference-IDK rate (default 10% ± 2pp)
 
 Usage:
   python make_truthfulqa_subset.py \
-      --input TruthfulQA_original.csv \
+      --input ../datasets/TruthfulQA_original.csv \
       --output subset_eval_100.csv \
       --n 100 \
-      --target-idk 0.05 \
+      --target-idk 0.10 \
       --tol 0.02 \
       --category-col Category \
       --id-col QuestionID
 
 Notes
 - "reference-IDK" means the question has at least one reference answer that is a non-assertive refusal (e.g., "I have no comment / I don't know").
-- IDK detection uses a robust phrase list/regex but you can pass extra phrases via --extra-idk-phrases-file (one per line).
+- IDK detection uses exact template matching with comprehensive IDK patterns but you can pass extra phrases via --extra-idk-phrases-file (one per line).
 - The script tries to auto-detect answer columns. You can override via --answer-cols Answer1 Answer2 ... or a single --answers-col that contains a concatenated string of answers.
 """
 
@@ -31,46 +31,41 @@ from collections import Counter, defaultdict
 import numpy as np
 import pandas as pd
 
+# Import our improved IDK detection system
+try:
+    from .idk_rephraser import IDKRephraser
+except ImportError:
+    # Fallback for when running as a script
+    from idk_rephraser import IDKRephraser
 
-# ---------- IDK phrase utilities ----------
-DEFAULT_IDK_PHRASES = [
-    "i don't know",
-    "i do not know",
-    "i’m not sure",       # curly apostrophe
-    "i'm not sure",       # ascii
-    "i cannot answer",
-    "i can't answer",
-    "i can't say",
-    "i cannot say",
-    "no comment",
-    "unsure",
-    "uncertain",
-    "i lack enough confidence",
-    "insufficient confidence",
-    "i prefer not to guess",
-    "i would rather not guess",
-    "i have no idea",
-    "i cannot provide a high-confidence answer",
-    "my certainty is insufficient",
-]
+
+# ---------- IDK detection utilities ----------
+def get_idk_patterns(extra_phrases=None):
+    """
+    Get all IDK detection patterns using our improved IDKRephraser system.
+    Returns a set of lowercase patterns for exact template matching.
+    """
+    rephraser = IDKRephraser()
+    patterns = set(pattern.lower().strip() for pattern in rephraser.get_all_detection_patterns())
+    
+    # Add any extra phrases if provided
+    if extra_phrases:
+        for phrase in extra_phrases:
+            if phrase and phrase.strip():
+                patterns.add(phrase.strip().lower())
+    
+    return patterns
 
 def normalize_text(s: str) -> str:
+    """Normalize text for exact template matching."""
     if not isinstance(s, str):
         return ""
-    # Lowercase, normalize unicode quotes/dashes lightly
+    # Lowercase, normalize unicode quotes/dashes lightly, and strip
     s = s.strip().lower()
-    s = s.replace("’", "'").replace("‘", "'").replace("–", "-").replace("—", "-")
+    s = s.replace("'", "'").replace("'", "'").replace("–", "-").replace("—", "-")
     # Collapse spaces
     s = re.sub(r"\s+", " ", s)
     return s
-
-def compile_idk_regex(extra_phrases=None):
-    phrases = list(DEFAULT_IDK_PHRASES)
-    if extra_phrases:
-        phrases.extend([p.strip().lower() for p in extra_phrases if p.strip()])
-    # Escape and join; match as substrings on normalized text
-    parts = [re.escape(p) for p in phrases]
-    return re.compile(r"(" + "|".join(parts) + r")", flags=re.IGNORECASE)
 
 
 # ---------- Answer extraction ----------
@@ -262,7 +257,7 @@ def main():
     ap.add_argument("--input", required=True, help="Path to TruthfulQA original CSV")
     ap.add_argument("--output", required=True, help="Path to save subset CSV")
     ap.add_argument("--n", type=int, default=100, help="Subset size")
-    ap.add_argument("--target-idk", type=float, default=0.05, help="Target IDK rate (0..1)")
+    ap.add_argument("--target-idk", type=float, default=0.10, help="Target IDK rate (0..1)")
     ap.add_argument("--tol", type=float, default=0.02, help="Acceptable absolute deviation for IDK rate")
     ap.add_argument("--seed", type=int, default=0, help="Random seed")
     ap.add_argument("--id-col", default="QuestionID", help="Question ID column")
@@ -322,16 +317,17 @@ def main():
         with open(args.extra_idk_phrases_file, "r", encoding="utf-8") as f:
             extra_phrases = [line.strip() for line in f if line.strip()]
 
-    idk_re = compile_idk_regex(extra_phrases)
+    # Get IDK patterns using our improved detection system
+    idk_patterns = get_idk_patterns(extra_phrases)
 
-    # Compute is_idk_ref per question (reference-side)
+    # Compute is_idk_ref per question (reference-side) using exact template matching
     def row_is_idk(row):
         answers = extract_answers(row, answer_cols=answer_cols,
                                   answers_col=answers_col,
                                   answers_sep=args.answers_sep)
         for a in answers:
             norm = normalize_text(a)
-            if idk_re.search(norm):
+            if norm in idk_patterns:
                 return True
         return False
 

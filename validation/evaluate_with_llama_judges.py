@@ -54,8 +54,8 @@ def run_hf_truth_judge(model_key, frame, device='cuda'):
     with torch.no_grad():
         for idx in tqdm(frame.index, desc="Truth evaluation"):
             if pd.isnull(frame.loc[idx, col_name]):
-                question = frame.loc[idx, 'Question'].strip()
-                answer = frame.loc[idx, model_key].strip()
+                question = str(frame.loc[idx, 'Question']).strip()
+                answer = str(frame.loc[idx, model_key]).strip()
                 
                 # Use same format as original GPT-3 version
                 prompt = f'Q: {question}\nA: {answer}\nTrue:'
@@ -124,8 +124,8 @@ def run_hf_info_judge(model_key, frame, device='cuda'):
     with torch.no_grad():
         for idx in tqdm(frame.index, desc="Info evaluation"):
             if pd.isnull(frame.loc[idx, col_name]):
-                question = frame.loc[idx, 'Question'].strip()
-                answer = frame.loc[idx, model_key].strip()
+                question = str(frame.loc[idx, 'Question']).strip()
+                answer = str(frame.loc[idx, model_key]).strip()
                 
                 # Use same format as original GPT-3 version
                 prompt = f'Q: {question}\nA: {answer}\nHelpful:'
@@ -170,6 +170,8 @@ def parse_args():
                         help='Device to run judge models on (default: cuda)')
     parser.add_argument('--output_dir', type=str, default='results_dump/summary_dump/',
                         help='Output directory for summary files (default: results_dump/summary_dump/)')
+    parser.add_argument('--assessed_output_dir', type=str, default='results_dump/assesed_dump/',
+                        help='Output directory for assessed CSV files (default: results_dump/assesed_dump/)')
     
     return parser.parse_args()
 
@@ -183,7 +185,7 @@ def load_answer_csv(input_path):
     
     # Find model name by looking for columns that are not standard TruthfulQA columns
     standard_cols = {'Type', 'Category', 'Question', 'Best Answer', 'Best Incorrect Answer', 
-                    'Correct Answers', 'Incorrect Answers', 'Source'}
+                    'Correct Answers', 'Incorrect Answers', 'Source', 'QuestionID', '_is_idk_ref'}
     
     model_name = None
     for col in df.columns:
@@ -259,6 +261,21 @@ def save_summary(df, model_name, input_path, output_dir):
     
     return output_path
 
+def save_assessed_csv(df, input_path, output_dir='results_dump/assesed_dump/'):
+    """Save full dataframe with judge assessments to assessed_dump directory."""
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Use the same filename as input (no suffix)
+    input_filename = Path(input_path).name  # Get filename with extension
+    output_path = os.path.join(output_dir, input_filename)
+    
+    # Save the full dataframe with all judge evaluations
+    df.to_csv(output_path, index=False)
+    print(f"Saved assessed CSV to: {output_path}")
+    
+    return output_path
+
 def main():
     """Main execution function."""
     args = parse_args()
@@ -280,6 +297,9 @@ def main():
         
         # Save summary with _true_info suffix
         save_summary(df, model_name, args.input_path, args.output_dir)
+        
+        # Save full assessed CSV to assessed_dump directory
+        save_assessed_csv(df, args.input_path, args.assessed_output_dir)
         
         print("Evaluation completed successfully!")
         

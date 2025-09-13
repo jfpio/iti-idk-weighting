@@ -1,168 +1,240 @@
 # **Does Adding IDK to Positive Steering Help?**
 
-# Executive Summary (≤ 600 words)
+## Executive Summary (≤ 600 words)
 
-**Question.** When building head-level steering directions for truthfulness, does including **IDK** (non-committal) answers among the *positives* (as in Li et al., 2024) actually help—versus using only **TRUE** answers? If yes, under what conditions (amount/type of IDK), and how does it affect hallucinations vs. informativeness?
+## What problem am I trying to solve?
+**Question.** When building head-level steering directions for truthfulness, does including **I don't know (IDK)** answers among the *positives* (as in Li et al., 2024) actually help—versus using only **TRUE** answers? If yes, under what **dose** (weight) of IDK, and how does it affect **hallucinations** vs **informativeness**?
 
-**Method.** Replicate the ITI Mass Mean Shift setup (per-head mean-difference in head space at the last answer token). Hold everything constant and change **only** the composition of the positive set used to compute the mean:
+**Method.** Replicate ITI’s Mass Mean Shift (per-head mean-difference at the last answer token). Hold everything constant and vary **only** the positive-class composition by assigning a **weight β** to IDK examples when computing the positive mean:
 
-* C0 (Original): **TRUE ∪ IDK**
-* C1: **TRUE-only**
-* C2: **TRUE ∪ rephrased-IDK** (paraphrased versions of IDK)
-* C3: **TRUE ∪ 2×IDK** (oversampled)
+- β = 0 → TRUE-only (numerically use β=1e-6 if the code requires non-empty weight).
+- β = 0.5 → “light IDK”.
+- β = 1 → original (TRUE ∪ IDK).
+- β = 2 → oversampled IDK without duplicating rows.
 
-Use the same top-K heads (selected once) and sweep a tiny α grid. Evaluate on TruthfulQA (generation) with **True×Informative** and the decomposition into **{True\&Info, True\&Not, False\&Info, False\&Not}**. (Optional Phase-2: add **CAA-style** contrastive directions and a small **phrase-block** control.)
+Use one fixed set of top-K heads (selected once at β=1) and a tiny α grid. Evaluate on TruthfulQA (generation) with **True×Informative**, the **4-bucket decomposition** {True&Info, True&Not, False&Info, False&Not}, plus new safety diagnostics.
 
 **Findings (to be filled by results).**
+- *Claim A:* β≈0–0.5 reduces **False&Informative** (hallucinations) with small or no increase in unnecessary abstention; **HAP(0.10)** rises; CE/KL drift small.
+- *Claim B:* Using **rephrased** IDK (instead of stock phrases) in the positive mean yields better trade-offs than stock IDK.
+- *Claim C:* β=2 increases True&Not (refusals) and harms True×Info; HAP falls—naively adding IDK is harmful.
 
-* Claim A: C1 (TRUE-only) matches/underperforms C0 on True×Info but reduces **False\&Informative**.
-* Claim B: C2 (rephrased-IDK) outperforms C0 on False\&Informative without tanking Info → suggests the *type* of IDK matters beyond style.
-* Claim C: C3 improves “True” mostly via **True\&Not** (more refusals) and loses on Info → naive “more IDK” is harmful.
+**Takeaway.** A *modest* IDK weight in the positive mean can improve safety with limited cost; large IDK weight encourages unhelpful refusals. The β **dose–response** makes the trade-off explicit and reproducible.
 
-**Takeaway.** A small, well-chosen amount of IDK in positives may help, but oversampling IDK (or using stock phrasing) risks style-driven refusals. For a minimal project, **varying IDK in the positive mean** already yields actionable insight, while staying faithful to ITI.
-
-**Why it fits Neel’s guidance.** Clear baselines, one moving part (positive set), simple plots, ablations that rule out obvious confounds; negative or null results are still informative.
-
-# Background & Related Work (brief, with pointers)
-
-* **TruthfulQA** benchmark: generation track uses two axes—**Truthfulness** and **Informativeness**—with the main metric **True×Informative**; non-committal answers like “I have no comment” are truthful but uninformative (Lin et al., 2021; Askell et al., 2021).
-* **Inference-Time Intervention (ITI):** Li et al. (2024) build **per-head** truth-steering directions from labeled activations (TRUE vs FALSE), and find **Mass Mean Shift** works best; evaluation reports improved TruthfulQA scores and CE/KL drift on web text.
-* **Behavioral calibration & IDK:** Kalai et al. (2025) argue for explicit confidence targets and that **IDK** should be used when below a threshold; our study probes whether **including IDK in steering positives** helps in practice under the TruthfulQA metric.
-* **Contrastive/activation steering (CAA-style):** Using contrastive pairs to form directions from activation differences is a standard technique in representation engineering; we include a lean CAA baseline as an optional comparison.
-
-# Research Goals
-
-1. **Mechanistic:** Understand how adding IDK exemplars to the positive class shifts the **head-level steering direction(s)**.
-2. **Behavioral:** Measure the trade-off between **hallucination reduction (False\&Info ↓)** and **informativeness** when steering with different positive sets.
-3. **Practical:** Identify a **minimal recipe** (positive composition, α, K) that improves True×Info without large distribution drift (CE/KL).
-
-# Problems with the True×Informative Metric
-
-* **IDK counts as True.** In TruthfulQA generation, non‑assertive answers (e.g., “I have no comment”) are labeled **True** but **Not‑informative**. This can penalize appropriate abstentions when scoring with the **product** `True×Info`.
-* **Flipping a hallucination to an abstention isn’t always rewarded.** If one item moves from **False & Informative** to **True & Not**, with `Δ=1/N`, then
-
-  `ΔScore = (T+Δ)(I−Δ) − (T×I) = Δ·(I−T) − Δ²`.
-
-  The change is \*\*positive only when \*\***`I − T > Δ`** (model is over‑informative relative to truth). When models are already fairly truthful (`T ≥ I`), the same safety improvement **lowers** the product.
-* **Informativeness can move for stylistic reasons** (shorter answers, templated cautions), making the product hard to interpret without the 4‑bucket breakdown.
-* **Conclusion.** We retain **True×Info** for comparability, but we also report direct safety/abstention quantities and a small, principled supplement that reflects harm.
-
-# Supplemental Metric: Harm‑Adjusted Product (HAP)
-
-Let `T = Pr[True]`, `I = Pr[Informative]`, and `H = Pr[False & Informative]` (hallucinations). Define
-
-`S_λ = (T × I) − λ · H`, with a small grid `λ ∈ {0.05, 0.10, 0.20}`.
-
-Properties:
-
-* Penalizes confident falsehoods directly; **FI→TN** flips always increase `S_λ` for modest `λ`.
-* Still rewards being both truthful and informative (via `T×I`).
-* Adds one transparent knob (`λ`) that we **pre‑register** and sweep, avoiding metric shopping.
-
-We also report two single‑number diagnostics:
-
-* **Hallucination rate** `H = Pr[False & Informative]`.
-* **Unnecessary abstention** `U = Pr[True&Info → True&Not]` vs the baseline.
-
-# Research Questions & Hypotheses
-
-**New metric & diagnostics.** In addition to True×Info, we compute **HAP** `S_λ = T×I − λ·H` (λ∈{0.05,0.10,0.20}), **H** (hallucination rate), and **U** (unnecessary abstention).
-
-**RQ1.** Does **TRUE‑only** steering (C1) beat **TRUE∪IDK** (C0) on HAP without harming CE/KL?
-
-* **H1.1:** C1 **reduces H** more than it increases `U`, hence **`ΔS_λ > 0`** for at least one λ in the grid.
-* **H1.2:** True×Info is flat or ↑ slightly; any small drop comes with a clear **H ↓**.
-
-**RQ2.** Does **rephrased‑IDK** (C2) outperform C0 on HAP?
-
-* **H2.1:** C2 yields **`S_λ ≥`**\*\* C0\*\* for most λ by lowering **H** while keeping **Info ≈**.
-* **H2.2:** Direction similarity suggests reduced style leakage relative to C3.
-
-**RQ3.** Does **oversampled‑IDK** (C3) help or hurt on HAP?
-
-* **H3.1:** C3 **increases U** more than it reduces **H**, so **`ΔS_λ < 0`** across λ.
-* **H3.2:** True×Info falls primarily via **True\&Not ↑**.
-
-**RQ4 (optional).** Do **CAA‑style** contrastive directions improve HAP over Mass Mean Shift?
-
-* **H4.1:** CAA achieves \*\*higher \*\***`S_λ`** than C0/C1 with similar CE/KL.
-* **H4.2:** CAA reduces **H** at least as much as C1 with **Info ≈**.
-
-# Minimal Experimental Plan (Neel-friendly)
-
-**Model & locus.** Same base LM and locus as ITI: per-head activations at the **last answer token**; intervene **post-attention, pre-head-output-projection**.
-
-**Data.** TruthfulQA (generation). Use the standard instruction prompt. For direction estimation, form QA pairs (Q + reference A). For evaluation, generate with greedy (or low-temperature) decoding.
-
-**Head selection (once).** Train simple per-head **logistic probes (TRUE vs FALSE)** on C0 train/val; rank by val accuracy; pick **top K = 10** heads. Keep K fixed for all conditions.
-
-**Directions (per condition).** Mass Mean Shift:
-$d = \mu(\text{positives}) - \mu(\text{FALSE})$, scaled by per-head projection std, exactly as in ITI.
-
-* **C0:** positives = TRUE ∪ IDK
-* **C1:** positives = TRUE
-* **C2:** positives = TRUE ∪ rephrased-IDK (swap in paraphrases during mean computation)
-* **C3:** positives = TRUE ∪ 2×IDK (oversample IDK)
-
-**Hyperparameters.** **α ∈ {0.5, 1.0, 1.5}**, pick on a small validation split; **K = 10** fixed; use the same seed and split across conditions.
-
-**Metrics.**
-
-* **Primary (comparability):** TruthfulQA **True×Informative** plus the 4 bucket counts **{T\&I, T&¬I, ¬T\&I, ¬T&¬I}**.
-* **Safety/abstention diagnostics:** **Hallucination rate** `H = Pr[False&Informative]`, **Unnecessary abstention** `U` (fraction that move from **True\&Info** at baseline to **True\&Not** under intervention).
-* **Harm‑Adjusted Product (HAP):** `S_λ = T×I − λ·H`, with λ∈{0.05,0.10,0.20}.
-* **Secondary:** LM **CE** and **KL(post‖pre)** on a web‑text slice.
-
-**Analysis & decision rules (pre‑registered).** We call a condition a **win over C0** if: (i) **H** decreases by ≥X pp with **U ≤ Y** pp (we’ll set X,Y in advance, e.g., X=3, Y=1), (ii) **`S_0.10`**\*\* increases\*\*, and (iii) **CE/KL** stay within small tolerances.
-
-**Reporting.** 2–3 small plots:
-
-1. **Decomposition bar chart** (four categories) for C0–C3 at best α (with bootstrap 95% CIs).
-2. **HAP vs λ** (small line plot) per condition; annotate `ΔH` and `ΔU`.
-3. **Tiny table** of (True×Info, `S_0.10`, H, U, CE, KL) per condition.
-4. *(Optional)* **Cosine similarity** between direction vectors per head: cos(d\_C1, d\_C0), cos(d\_C2, d\_C0), cos(d\_C3, d\_C0).
-5. **Tiny table** of (True×Info, True, Info) per condition.
-6. *(Optional)* **Cosine similarity** between direction vectors per head: cos(d\_C1, d\_C0), cos(d\_C2, d\_C0), cos(d\_C3, d\_C0).
-
-# Implementation Checklist (12–20h)
-
-* **Setup (off-clock allowed):** model + harness; script to extract head outputs at last token; TruthfulQA loader.
-* **0–3h:** Build C0 training tuples; per-head logistic probes; select top-K.
-* **3–6h:** Compute directions d\_C0…d\_C3; wire intervention (α sweep).
-* **6–10h:** Run generation on the eval split; compute True×Info and decomposition.
-* **10–14h:** CE/KL drift on web-text slice; select best α per condition (by val True×Info).
-* **14–18h:** Optional CAA baseline on a small subset; make plots and the tiny result table.
-* **+2h (separate):** Write the **executive summary** page with 2–3 figures.
-
-# Risks & Mitigations
-
-* **Style confound:** Using stock “I have no comment” might drive behavior. *Mitigation (scope-compatible):* the **C2** condition uses **rephrased IDK** for the positive mean; no extra labels required. (Phase-2 can add phrase-blocking.)
-* **Overfitting to α/K:** Use a tiny validation split; keep K fixed and α grid small.
-* **Judge variance:** Use the same GPT-judge or open-weights replacement consistently across conditions; optionally human-audit a small stratified sample.
-
-# Expected Outcomes (decision rules)
-
-* If **C1 ≈ C0** on True×Info and **False\&Info ↓**, report “IDK in positives not necessary; TRUE-only suffices.”
-* If **C2 > C0** (False\&Info ↓ with Info ≈), report “IDK helps **if phrased diversely**; supports including IDK.”
-* If **C3** worsens True×Info or spikes True\&Not, report “naive up-weighting of IDK harms informativeness.”
-
-# Future Work (next phase)
-
-1. **Phrase-block evaluation** (decode-time blocklist) to verify non-stylistic abstention.
-2. **ASSERTIVE split** and **gated steering:** learn a separate **IDK/abstention** direction and **gate** it by confidence; evaluate risk–coverage (behavioral calibration).
-3. **CAA at scale:** contrastive directions built from (Q + positive A) vs (Q + negative A) logits/activations; compare to Mass Mean Shift across heads.
-4. **Geometry:** whitened/CCA angles between d\_truth, d\_t+idk, and d\_idk; head/layer maps.
-5. **OOD generalization:** add FEVER-open / SciQ-open style sets; verify patterns outside TruthfulQA.
-6. **Token-level constraints:** decoding without classic refusal n-grams to stress-test abstention.
-7. **Confidence gating:** logit-margin vs probe-score thresholds; **Kalai-style explicit confidence targets** (answer iff P(correct)>t); sweep t to compute **risk–coverage**, **AURC**, **coverage\@fixed-risk**, and a **cost-aware score** with IDK=0 and wrong-answer penalty t/(1−t).
-
-# References (informal)
-
-* **TruthfulQA:** Lin et al., 2021; Askell et al., 2021.
-* **Inference-Time Intervention (ITI):** Li et al., 2024.
-* **Behavioral calibration & confidence targets:** Kalai et al., 2025.
-* **Contrastive/activation steering (CAA-style / representation engineering):** e.g., work on activation addition / contrastive features in LM steering.
+**Why this fits Neel’s guidance.** One moving part (β), clear baselines, compact plots, strong sanity checks, and honest failure analysis.
 
 ---
 
-*Notes for the Neel Nanda track:* keep it **simple**, beat **obvious baselines**, and include **clear plots** with a short, honest discussion of failure modes; a tight **executive summary** with the key figure is required.
+## Background & Related Work (brief pointers)
+
+- **TruthfulQA**: generation track labels **Truthfulness** and **Informativeness**; the main metric is **True×Informative**; non-assertive answers (e.g., “I have no comment”) are typically **True & Not-informative** (Lin et al., 2021; Askell et al., 2021).
+- **Inference-Time Intervention (ITI)**: Li et al. (2024) form per-head directions; **Mass Mean Shift** outperforms probe-weight and CCS; they report TruthfulQA gains and CE/KL drift on web text.
+- **Behavioral calibration**: Kalai et al. (2025) advocate explicit confidence targets and appropriate **IDK**; our study investigates whether including IDK in the **steering positives** helps under TruthfulQA-style evaluation.
+
+---
+
+## Research Goals
+
+1. **Mechanistic**: Characterize how IDK weight β changes the learned **head-space direction(s)**.
+2. **Behavioral**: Quantify the trade-off between **hallucination reduction** and **informativeness** across β.
+3. **Practical**: Identify a **minimal recipe** (β, α, K) that improves safety (and, ideally, True×Info) with small CE/KL drift.
+
+---
+
+## Problems with the True×Informative Metric
+
+- **IDK counts as True.** Non-assertive answers are labeled **True** but **Not-informative**, so the product can **penalize appropriate abstention**.
+- **FI→TN isn’t always rewarded.** For one item flip from **False&Info** to **True&Not**, with Δ=1/N:
+  
+  \[
+  \Delta (T\!\times\!I)=(T+\Delta)(I-\Delta)-TI=\Delta\,(I-T)-\Delta^2
+  \]
+  
+  The change is **positive only if \(I - T > \Delta\)** (over-informative regime). When \(T\!\ge\!I\), this safety improvement **lowers** the metric.
+- **Style confounds** (shorter/templated answers) can move “Info” independent of truth.
+
+**Conclusion.** Keep **True×Info** for comparability, but add **direct safety diagnostics** and a small, principled supplement that reflects harm.
+
+---
+
+## Supplemental Metric: Harm-Adjusted Product (HAP)
+
+Let \(T=\Pr[\text{True}],\, I=\Pr[\text{Informative}],\, H=\Pr[\text{False \& Informative}]\).
+Define a harm-aware score:
+
+\[
+\boxed{S_\lambda = (T \times I) - \lambda \, H}, \quad \lambda \in \{0.05, 0.10, 0.20\}.
+\]
+
+- Explicitly penalizes confident falsehoods; **FI→TN** flips **increase** \(S_\lambda\) for modest \(\lambda\).
+- Still rewards joint truth + informativeness via \(T\times I\).
+- We **pre-register** the λ grid to avoid metric shopping.
+
+**Diagnostics to always report**
+- **Hallucination rate** \(H = \Pr[\text{False \& Informative}]\).
+- **Unnecessary abstention** \(U = \Pr[\text{items that are True\&Info at β=1 become True\&Not at β}] \).
+
+---
+
+## Research Questions & Hypotheses (with HAP)
+
+- **RQ1.** Does **TRUE-only** (β≈0) beat **β=1** on HAP without harming CE/KL?  
+  **H1.1**: \(H\) drops more than \(U\) rises ⇒ \(S_\lambda\) ↑ for ≥1 λ.  
+  **H1.2**: True×Info flat/↑; any small drop coincides with clear \(H\) ↓.
+
+- **RQ2.** Does **rephrased-IDK** (β=1, paraphrased) outperform stock β=1 on HAP?  
+  **H2.1**: \(H\) ↓ with Info ≈ ⇒ \(S_\lambda\) ≥ baseline for most λ.
+
+- **RQ3.** Does **oversampled IDK** (β=2) help or hurt?  
+  **H3.1**: \(U\) rises more than \(H\) falls ⇒ \(S_\lambda\) ↓ across λ; True×Info falls due to **True&Not** ↑.
+
+- **RQ4 (optional).** Do **CAA-style** contrastive directions improve HAP vs Mass Mean Shift?  
+  **H4.1**: \(S_\lambda\) ↑ with similar CE/KL; \(H\) ↓ at least as much as β≈0.
+
+---
+
+## Minimal Experimental Plan (Neel-friendly)
+
+### Model & locus
+Same as ITI: per-head outputs at the **last answer token**; intervene **post-attention, pre head-output-projection**.
+
+### Data
+TruthfulQA (generation). Use the standard instruction prompt. For direction estimation, use (Q + reference A). For evaluation, generate deterministically (e.g., greedy/low-T).
+
+### Head selection (once)
+Train per-head **logistic probes** (TRUE vs FALSE) on β=1 (train/val). Rank by validation accuracy; pick **top-K=10**. Keep K **fixed** for all β.
+
+### β-weighted Mass Mean Shift
+Positive mean per head in head-space at last token:
+
+\[
+\mu_+(\beta)=\frac{\sum_i w_i(\beta)\,x_i}{\sum_i w_i(\beta)},\quad
+w_i(\beta)=\begin{cases}
+1 & \text{if TRUE}\\
+\beta & \text{if IDK}
+\end{cases}
+\]
+\[
+d_\beta = \mu_+(\beta) - \mu_- \quad\text{(negatives = FALSE)}
+\]
+
+Scale by per-head projection std estimated with the same weights (or reuse ITI’s σ if preferred).
+
+**β grid**: {0, 0.5, 1, 2}. If the repo disallows β=0, use **β=1e-6**.
+
+**Rephrased-IDK variant (C2)**: For direction-estimation only, replace stock IDK strings with paraphrases; β still applies.
+
+### Hyperparameters
+β ∈ {0, 0.5, 1, 2}; **α ∈ {0.5, 1.0, 1.5}** (picked on a small validation split); **K=10** fixed; same seed/split across β.
+
+### Cross-validation & α selection
+Use `validate2fold`: compute \(d_\beta\) on the **train fold**; evaluate on the **held-out fold**.  
+Select α per β to **maximize HAP(0.10)** on validation, then **freeze** α for test.  
+Bootstrap per question (e.g., 10k resamples) to obtain **95% CIs**.
+
+---
+
+## Metrics
+
+**Primary (comparability):** TruthfulQA **True×Informative** + the 4 buckets {T&I, T&¬I, ¬T&I, ¬T&¬I}.  
+**Safety/abstention diagnostics:** **H** (False&Info), **U** (T&Info@β=1 → T&Not@β).  
+**Harm-Adjusted Product:** \(S_\lambda=T\times I - \lambda H\) for λ∈{0.05, 0.10, 0.20}.  
+**Secondary:** LM **CE** and **KL(post‖pre)** on a small web-text slice.
+
+**Decision rules (pre-registered):** **Win over β=1** if  
+(i) \(H\) decreases by ≥**X** pp with \(U \le \)**Y** pp (e.g., X=3, Y=1),  
+(ii) \(S_{0.10}\) increases, and  
+(iii) CE/KL remain within small tolerances.
+
+---
+
+## Core Analyses & Plots
+
+1) **Dose–response lines (best α per β)**  
+   - Panel A: **H vs β** (bootstrap 95% CIs).  
+   - Panel B: **U vs β** (95% CIs).  
+   *Read:* good β lowers H with small U.
+
+2) **HAP vs β (λ grid)**  
+   - y = \(S_\lambda\), x = β; lines for λ∈{0.05, 0.10, 0.20}.  
+   *Read:* look for a robust peak (often β≈0–0.5).
+
+3) **Four-bucket stacked bars**  
+   - One bar per β (best α), labeled **F&I** and **T&I** segments.  
+   *Read:* wins shrink F&I while keeping T&I near baseline.
+
+4) **Tiny results table** (one row per β)  
+   - Columns: True×Info, \(S_{0.10}\), T, I, **H**, **U**, CE, KL.
+
+**Optional (choose ≤2 if time allows):**  
+A) **Trade-off scatter** (ΔInfo vs ΔTruth or U vs H) with iso-HAP contours (λ=0.1).  
+B) **Cosine(d_β, d_1)** across K heads (interpretability snack).  
+C) **α-sensitivity mini-plot**: HAP(0.10) vs α for each β.  
+D) **Subcategory bars**: ΔF&I by TruthfulQA category.  
+E) **CE/KL drift bars** per β.  
+F) **Sankey** of transitions from β=1 to β=best.
+
+---
+
+## Sanity-Check Toy Example (debug your pipeline)
+
+Assume **N=100**; illustrate expected directions of change.
+
+- **β=1 (baseline)**: T&I=62, T&N=8, F&I=20, F&N=10 → T=0.70, I=0.82, **H=0.20**, True×Info=0.574, \(S_{0.10}=0.554\).
+- **β=0**: T&I=64, T&N=11, F&I=15, F&N=10 → **H=0.15**, **U=1%**, True×Info=0.5925, \(S_{0.10}=0.5775\).
+- **β=0.5**: T&I=64, T&N=10, F&I=16, F&N=10 → **H=0.16**, **U=0%**, True×Info=0.5920, \(S_{0.10}=0.5760\).
+- **β=2**: T&I=58, T&N=15, F&I=17, F&N=10 → **H=0.17**, **U=4%**, True×Info=0.5475, \(S_{0.10}=0.5305\).
+
+*Use these to sanity-check your plotting code; replace with real outputs later.*
+
+---
+
+## Implementation Checklist (12–20 h)
+
+- **Setup (off-clock allowed):** model/harness; extraction of head outputs at last token; TruthfulQA loader.
+- **0–3 h:** β=1 dataset; per-head probes; select top-K once.
+- **3–6 h:** Implement β-weighted mean/σ; compute \(d_\beta\) for β∈{0,0.5,1,2}; wire intervention; α grid.
+- **6–10 h:** For each β, pick α on val; run generation on test; compute buckets, H, U, True×Info, HAP(λ).
+- **10–14 h:** CE/KL drift; bootstrap CIs; finalize α per β.
+- **14–18 h:** Make dose–response plots + tiny table; (optional) cosine figure.
+- **+2 h (separate):** Executive summary with the key figure set (H/U vs β, HAP vs β, stacked bars).
+
+---
+
+## Risks & Mitigations
+
+- **Style confound:** Stock “I have no comment” may drive behavior. *Mitigation (scope-compatible):* **rephrased-IDK** variant for the positive mean; Phase-2 adds decode-time **phrase blocking**.
+- **Overfitting to α/K:** Use a tiny validation split; **K fixed**, small α grid.
+- **Judge variance:** Keep judge constant across conditions; optionally human-audit a small stratified sample.
+
+---
+
+## Expected Outcomes (decision rules)
+
+- **TRUE-only viable:** β≈0 reduces **H** with small **U**; \(S_{0.10}\) ↑; True×Info flat; CE/KL stable.  
+- **Rephrased-IDK helps:** β=1 (paraphrased) **H ↓** with Info ≈, **HAP ↑**.  
+- **Oversampling IDK harms:** β=2 **U ↑** dominates; **HAP ↓**; True×Info falls via **T&N ↑**.
+
+---
+
+## Future Work (Phase-2)
+
+1. **Phrase-block evaluation:** decode-time blocklist to verify non-stylistic abstention.  
+2. **ASSERTIVE split + gating:** learn an abstention direction; **gate** by confidence; evaluate **risk–coverage** (behavioral calibration).  
+3. **CAA at scale:** contrastive directions from (Q+pos A) vs (Q+neg A); compare to Mass Mean Shift.  
+4. **Geometry:** whitened/CCA angles among \(d_{\text{truth}}, d_{\text{t+idk}}, d_{\text{idk}}\); head/layer maps.  
+5. **OOD generalization:** FEVER-open / SciQ-open-style sets.  
+6. **Token-level constraints:** decode without classic refusal n-grams.  
+7. **Confidence targets (Kalai):** sweep **t**, compute **risk–coverage**, **AURC**, **coverage@fixed-risk**, and a **cost-aware score** (IDK=0; wrong-answer penalty \(t/(1-t)\)).
+
+---
+
+## References (informal)
+- **TruthfulQA:** Lin et al., 2021; Askell et al., 2021.  
+- **Inference-Time Intervention:** Li et al., 2024.  
+- **Behavioral calibration:** Kalai et al., 2025.  
+- **Contrastive/activation steering:** standard representation-engineering / activation-addition literature.
+
+---
+
+*Neel-track notes:* prioritize **clarity over breadth**; beat **simple baselines**; show **error bars**; pre-register **λ, α, K** and decision rules; present **one killer figure** that tells the story at a glance.

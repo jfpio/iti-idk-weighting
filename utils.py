@@ -605,8 +605,6 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
             assert models[mdl] is not None, 'must provide llama model'
             llama_model = models[mdl]
             llama_tokenizer = AutoTokenizer.from_pretrained(ENGINE_MAP[mdl])
-            loaded_tokenizers[mdl] = llama_tokenizer  # Store for cleanup
-            
             if 'judge' in metric_names or 'info' in metric_names:
                 questions = tqa_run_answers(questions, ENGINE_MAP[mdl], mdl, preset, model=llama_model, tokenizer=llama_tokenizer,
                                 device=device, cache_dir=cache_dir, verbose=verbose,
@@ -617,15 +615,49 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
             if 'mc' in metric_names:
                 questions = tqa_run_probs(questions, ENGINE_MAP[mdl], mdl, model=llama_model, tokenizer=llama_tokenizer, preset=preset, device=device, cache_dir=cache_dir, verbose=False, interventions=interventions, intervention_fn=intervention_fn, instruction_prompt=instruction_prompt, many_shot_prefix=many_shot_prefix)
                 utilities.save_questions(questions, output_path)
-            
-            # Skip CE loss and KL divergence calculations to save time
-            model_metrics[mdl] = {'ce_loss': np.nan, 'kl_wrt_orig': np.nan}
+        
+        # gpt-neo
+        if mdl in ['neo-small', 'neo-med', 'neo-large']:
+            try:
+                models.run_answers(questions, ENGINE_MAP[mdl], mdl, preset,
+                                   device=device, cache_dir=cache_dir)
+                utilities.save_questions(questions, output_path)
+                if 'mc' in metric_names:
+                    models.run_probs(questions, ENGINE_MAP[mdl], mdl, preset=preset, device=device,
+                                     cache_dir=cache_dir)
+                    utilities.save_questions(questions, output_path)
+            except Exception as err:
+                print("ERROR")
+                print(err)
 
-    for model_key in model_names_for_cleanup: 
+        # unifiedqa
+        if mdl in ['uqa-small', 'uqa-base', 'uqa-large', 'uqa-3b']:
+            try:
+                models.run_UnifQA(questions, ENGINE_MAP[mdl], mdl, preset, device=device, cache_dir=cache_dir)
+                utilities.save_questions(questions, output_path)
+                if 'mc' in metric_names:
+                    models.run_probs_T5(questions, ENGINE_MAP[mdl], mdl, preset, device=device, cache_dir=cache_dir)
+                    utilities.save_questions(questions, output_path)
+            except Exception as err:
+                print(err)
+
+    for model_key in models.keys(): 
 
         for metric in metric_names: 
             if metric == 'mc':
                 continue
+            if metric == 'bleurt':
+                try:
+                    questions = metrics.run_BLEURT(model_key, questions, cache_dir=cache_dir)
+                    utilities.save_questions(questions, output_path)
+                except Exception as err:
+                    print(err)
+            elif metric in ['bleu', 'rouge']:
+                try:
+                    questions = metrics.run_bleu_and_rouge(model_key, questions)
+                    utilities.save_questions(questions, output_path)
+                except Exception as err:
+                    print(err)
             else:
                 warnings.warn("Metric {0} not known or unsupported, skipping!".format(metric), stacklevel=2)
 
@@ -641,35 +673,27 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
 
     # filter to critical ITI metrics only (time optimization)
     results = results[results['Metric'].isin(['MC1', 'MC2',
+                                              'bleu acc',
+                                              'rouge1 acc',
+                                              'BLEURT acc',
                                               'GPT-judge acc',
                                               'GPT-info acc'])]
     results = pd.pivot_table(results, 'Value', 'Model', 'Metric')
 
-    # Skip CE loss and KL divergence columns (time optimization)
-    # results['CE Loss'] = np.nan
-    # results['KL wrt Orig'] = np.nan
+    # calculate cross entropy loss on owt and kl wrt to original unedited on owt
+    results['CE Loss'] = np.nan
+    results['KL wrt Orig'] = np.nan
 
-    for model_key in model_names_for_cleanup: 
+    for model_key in models.keys(): 
         # if model_key not in questions.columns:
         #     warnings.warn("Answers missing for {0}!".format(model_key), stacklevel=2)
         #     continue
         if 'llama' in model_key or 'alpaca' in model_key or 'vicuna' in model_key:
-            # Use pre-calculated metrics from model processing loop
-            if model_key in model_metrics:
-                ce_loss = model_metrics[model_key]['ce_loss']
-                kl_wrt_orig = model_metrics[model_key]['kl_wrt_orig']
-            else:
-                print(f"No stored metrics found for {model_key} - using NaN values")
-                ce_loss = np.nan
-                kl_wrt_orig = np.nan
-        else:
-            # Non-llama models don't support CE/KL metrics in this implementation
-            ce_loss = np.nan
-            kl_wrt_orig = np.nan
+            ce_loss = run_ce_loss(model_key, model=llama_model, tokenizer=llama_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn)
+            kl_wrt_orig = run_kl_wrt_orig(model_key, model=llama_model, tokenizer=llama_tokenizer, device=device, interventions=interventions, intervention_fn=intervention_fn, separate_kl_device=separate_kl_device, orig_model=orig_model)
 
-        # Skip CE loss and KL divergence results assignment (time optimization)
-        # results.loc[model_key, 'CE Loss'] = ce_loss
-        # results.loc[model_key, 'KL wrt Orig'] = kl_wrt_orig
+        results.loc[model_key, 'CE Loss'] = ce_loss
+        results.loc[model_key, 'KL wrt Orig'] = kl_wrt_orig
 
     # save results
     results.to_csv(summary_path, index=False)

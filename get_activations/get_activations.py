@@ -13,7 +13,7 @@ import argparse
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 
 # Specific pyvene imports
-from utils import get_llama_activations_pyvene, tokenized_tqa, tokenized_tqa_gen, tokenized_tqa_gen_end_q
+from utils import get_llama_activations_pyvene, tokenized_tqa, tokenized_tqa_gen, tokenized_tqa_gen_end_q, resolve_device
 from interveners import wrapper, Collector, ITI_Intervener
 import pyvene as pv
 from dataset_utils.load_dataset import load_csv_as_mc2_dataset, load_csv_as_gen_dataset
@@ -27,6 +27,8 @@ HF_NAMES = {
     'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf', 
     'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf', 
     'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf', 
+    'llama3_1B': 'meta-llama/Llama-3.2-1B',
+    'llama3_1B_instruct': 'meta-llama/Llama-3.2-1B-Instruct',
     'llama3_8B': 'meta-llama/Meta-Llama-3-8B',
     'llama3_8B_instruct': 'meta-llama/Meta-Llama-3-8B-Instruct',
     'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
@@ -51,7 +53,7 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, dtype=torch.float16, device_map="auto")
-    device = "cuda"
+    device = resolve_device(args.device)
 
     if args.dataset_name == "tqa_mc2": 
         dataset = load_csv_as_mc2_dataset(get_default_dataset_path())

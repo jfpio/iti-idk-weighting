@@ -16,7 +16,7 @@ import sys
 sys.path.append('../')
 
 # Specific pyvene imports
-from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions
+from utils import alt_tqa_evaluate, flattened_idx_to_layer_head, layer_head_to_flattened_idx, get_interventions_dict, get_top_heads, get_separated_activations, get_com_directions, resolve_device
 from interveners import wrapper, Collector, ITI_Intervener
 from dataset_utils.path_utils import get_default_dataset_path, get_dataset_path_for_name
 import pyvene as pv
@@ -30,6 +30,8 @@ HF_NAMES = {
     'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf',
     'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf',
     'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf',
+    'llama3_1B': 'meta-llama/Llama-3.2-1B',
+    'llama3_1B_instruct': 'meta-llama/Llama-3.2-1B-Instruct',
     'llama3_8B': 'meta-llama/Llama-3.1-8B',
     'llama3_8B_instruct': 'meta-llama/Llama-3.1-8B-Instruct',
     'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
@@ -76,7 +78,8 @@ def main():
     # set seeds
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     df = pd.read_csv(get_dataset_path_for_name(args.dataset_name))
     
@@ -177,7 +180,7 @@ def main():
             input_path=f'splits/fold_{i}_test_seed_{args.seed}.csv',
             output_path=f'results_dump/answer_dump/{filename}.csv',
             summary_path=f'results_dump/summary_dump/{filename}.csv',
-            device="cuda", 
+            device=resolve_device(args.device), 
             interventions=None, 
             intervention_fn=None, 
             instruction_prompt=args.instruction_prompt,

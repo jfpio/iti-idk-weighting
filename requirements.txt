@@ -155,8 +155,7 @@ tqdm==4.67.1
 traitlets==5.14.3
 transformers==4.56.2
 treescope==0.1.10
--e file:///Users/janpiotrowski/Projekty/honest_llama/TruthfulQA
-typing-extensions==4.15.0
+truthfulqa  @ git+https://github.com/sylinrl/TruthfulQA
 typing-inspection==0.4.1
 tzdata==2025.2
 urllib3==2.5.0

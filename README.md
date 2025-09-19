@@ -106,11 +106,6 @@ The code automatically uses these pre-trained judge models:
 
 Install following [TruthfulQA instructions](https://github.com/sylinrl/TruthfulQA) to the iti environment. Some pip packages installed via TruthfulQA are outdated; important ones to update are datasets, transformers, einops.
 
-**Key Improvements:**
-- ✅ **No OpenAI API dependency** - Uses open-source HuggingFace models
-- ✅ **Memory optimization** - Sequential loading reduces GPU memory by 65%
-- ✅ **Cost savings** - Works with single 24GB GPU instead of requiring multiple GPUs
-
 ## Workflow
 
 (1) Get activations by running `python get_activations/get_activations.py --model_name llama_7B --dataset_name tqa_mc2` from the repo root. Layer-wise and head-wise activations are stored in the `features` folder. Prompts can be modified by changing the dataset-specific formatting functions in `utils.py`. 
@@ -140,24 +135,6 @@ python validation/validate_2fold.py --model_name llama_7B --model_prefix honest_
 - **Legacy Support**: For the original ITI paper implementation, refer to the `legacy/` folder (if available).
 
 **_NOTE regarding pyvene:_** This repository uses pyvene, a convenient wrapper for intervening on attention heads, instead of the original baukit-based implementation. The scripts ``validate_2fold.py``, ``utils.py``, and ``get_activations.py`` use pyvene for better generalizability to other open-source models. Additionally, **HuggingFace judge models** replace the original GPT-3 evaluation system for improved accessibility and reduced costs.
-
-### Recent Updates (2025)
-
-**🔥 Major Improvements:**
-- **No OpenAI API Required**: Replaced GPT-3 judges with HuggingFace models (`allenai/truthfulqa-truth-judge-llama2-7B`, `allenai/truthfulqa-info-judge-llama2-7B`)
-- **Memory Optimization**: Sequential loading reduces GPU memory usage by ~65% (44GB → 16GB peak)
-- **Single GPU Support**: Most models now work with a single 24GB GPU instead of requiring multiple GPUs
-- **Cost Savings**: Significant reduction in compute costs due to memory efficiency
-- **Automated Evaluation**: No manual judge model fine-tuning required
-
-**🚀 Quick Start (Updated):**
-```bash
-# Install dependencies (no OpenAI API key needed!)
-pip install pyvene transformers torch datasets scikit-learn einops accelerate
-
-# Run ITI evaluation on LLaMA-7B with single GPU (from repo root)
-python validation/validate_2fold.py --model_name llama_7B --sequential_loading --device 0
-```
 
 ### Results
 

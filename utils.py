@@ -14,8 +14,6 @@ import pandas as pd
 import warnings
 from einops import rearrange
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from baukit import Trace, TraceDict
-import sklearn
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.linear_model import LogisticRegression
 import pickle
@@ -46,11 +44,43 @@ from truthfulqa.utilities import (
     format_prompt_with_answer_strings,
     split_multi_answer,
     format_best,
-    find_start,
 )
 from truthfulqa.presets import preset_map, COMPARE_PRIMER
 from truthfulqa.models import find_subsequence, set_columns, MC_calcs
 from truthfulqa.evaluate import format_frame, data_to_dict
+
+
+def resolve_device(device_index: int | None = 0) -> torch.device:
+    """
+    Resolve the best available torch.device for this machine.
+    Preference order:
+    - CUDA (optionally using the provided device index)
+    - MPS (Apple Silicon)
+    - CPU
+    Args:
+        device_index: Optional CUDA device index to select when CUDA is available.
+    Returns:
+        torch.device: Selected device object (e.g., cuda:0, mps, or cpu).
+    """
+    try:
+        if torch.cuda.is_available():
+            # Respect a valid device index when provided
+            if (
+                device_index is not None
+                and isinstance(device_index, int)
+                and 0 <= device_index < torch.cuda.device_count()
+            ):
+                return torch.device(f"cuda:{device_index}")
+            return torch.device("cuda")
+    except Exception:
+        pass
+    # Apple Metal Performance Shaders (MPS)
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+    except Exception:
+        pass
+    return torch.device("cpu")
 
 
 def load_nq():
@@ -156,24 +186,24 @@ def tokenized_tqa_gen(dataset, tokenizer):
     return all_prompts, all_labels, all_categories
 
 
-def get_llama_activations_bau(model, prompt, device): 
-    HEADS = [f"model.layers.{i}.self_attn.head_out" for i in range(model.config.num_hidden_layers)]
-    MLPS = [f"model.layers.{i}.mlp" for i in range(model.config.num_hidden_layers)]
+# def get_llama_activations_bau(model, prompt, device): 
+#     HEADS = [f"model.layers.{i}.self_attn.head_out" for i in range(model.config.num_hidden_layers)]
+#     MLPS = [f"model.layers.{i}.mlp" for i in range(model.config.num_hidden_layers)]
 
-    with torch.no_grad():
-        prompt = prompt.to(device)
-        with TraceDict(model, HEADS+MLPS) as ret:
-        # with TraceDict(model, HEADS+MLPS, retain_input=True) as ret:
-            output = model(prompt, output_hidden_states = True)
-        hidden_states = output.hidden_states
-        hidden_states = torch.stack(hidden_states, dim = 0).squeeze()
-        hidden_states = hidden_states.detach().cpu().numpy()
-        head_wise_hidden_states = [ret[head].output.squeeze().detach().cpu() for head in HEADS]
-        head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim = 0).squeeze().numpy()
-        mlp_wise_hidden_states = [ret[mlp].output.squeeze().detach().cpu() for mlp in MLPS]
-        mlp_wise_hidden_states = torch.stack(mlp_wise_hidden_states, dim = 0).squeeze().numpy()
+#     with torch.no_grad():
+#         prompt = prompt.to(device)
+#         with TraceDict(model, HEADS+MLPS) as ret:
+#         # with TraceDict(model, HEADS+MLPS, retain_input=True) as ret:
+#             output = model(prompt, output_hidden_states = True)
+#         hidden_states = output.hidden_states
+#         hidden_states = torch.stack(hidden_states, dim = 0).squeeze()
+#         hidden_states = hidden_states.detach().cpu().numpy()
+#         head_wise_hidden_states = [ret[head].output.squeeze().detach().cpu() for head in HEADS]
+#         head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim = 0).squeeze().numpy()
+#         mlp_wise_hidden_states = [ret[mlp].output.squeeze().detach().cpu() for mlp in MLPS]
+#         mlp_wise_hidden_states = torch.stack(mlp_wise_hidden_states, dim = 0).squeeze().numpy()
 
-    return hidden_states, head_wise_hidden_states, mlp_wise_hidden_states
+#     return hidden_states, head_wise_hidden_states, mlp_wise_hidden_states
 
 def get_llama_activations_pyvene(collected_model, collectors, prompt, device):
     with torch.no_grad():
@@ -288,7 +318,7 @@ def tqa_run_answers(frame, engine, tag, preset, model=None, tokenizer=None, verb
 
             # --- intervention code --- #
 
-    if device:
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     return frame
@@ -418,7 +448,7 @@ def tqa_run_probs(frame, engine, tag, preset, model=None, tokenizer=None, verbos
 
                 MC_calcs(tag, frame, idx, scores_true, scores_false, ref_true, ref_best)
 
-    if device:
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     return frame
@@ -596,18 +626,6 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
         for metric in metric_names: 
             if metric == 'mc':
                 continue
-            if metric == 'bleurt':
-                try:
-                    questions = metrics.run_BLEURT(model_key, questions, cache_dir=cache_dir)
-                    utilities.save_questions(questions, output_path)
-                except Exception as err:
-                    print(err)
-            elif metric in ['bleu', 'rouge']:
-                try:
-                    questions = metrics.run_bleu_and_rouge(model_key, questions)
-                    utilities.save_questions(questions, output_path)
-                except Exception as err:
-                    print(err)
             else:
                 warnings.warn("Metric {0} not known or unsupported, skipping!".format(metric), stacklevel=2)
 
@@ -839,4 +857,3 @@ def get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, sepa
     com_directions = np.array(com_directions)
 
     return com_directions
-

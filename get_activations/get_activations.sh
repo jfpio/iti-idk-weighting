@@ -1,2 +1,3 @@
-python get_activations.py --model_name llama_7B --dataset_name subset_mc2
-python get_activations.py --model_name llama_7B --dataset_name subset_gen
+python get_activations.py --model_name llama3_8B_instruct --dataset_name tqa_mc2
+python get_activations.py --model_name llama3_8B_instruct --dataset_name tqa_gen
+python get_activations.py --model_name llama3_8B_instruct --dataset_name tqa_gen_end_q

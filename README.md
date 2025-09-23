@@ -83,9 +83,6 @@ Some of the code is from [user-friendly llama](https://github.com/ypeleg/llama),
 ## Installation
 In the root folder of this repo, run the following commands to set things up.
 ```
-conda env create -f environment.yaml
-conda activate iti
-python -m ipykernel install --user --name iti --display-name "iti"
 mkdir -p validation/results_dump/answer_dump
 mkdir -p validation/results_dump/summary_dump
 mkdir -p validation/results_dump/edited_models_dump
@@ -93,7 +90,7 @@ mkdir validation/splits
 mkdir validation/sweeping/logs
 mkdir get_activations/logs
 mkdir features
-git clone https://github.com/sylinrl/TruthfulQA.git
+pip install -r requirements.txt
 ```
 
 ## TruthfulQA Evaluation
@@ -103,38 +100,6 @@ This repository now uses **HuggingFace TruthfulQA judge models** instead of depr
 The code automatically uses these pre-trained judge models:
 - **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B` 
 - **Info Judge**: `allenai/truthfulqa-info-judge-llama2-7B`
-
-Install following [TruthfulQA instructions](https://github.com/sylinrl/TruthfulQA) to the iti environment. Some pip packages installed via TruthfulQA are outdated; important ones to update are datasets, transformers, einops.
-
-## Workflow
-
-(1) Get activations by running `python get_activations/get_activations.py --model_name llama_7B --dataset_name tqa_mc2` from the repo root. Layer-wise and head-wise activations are stored in the `features` folder. Prompts can be modified by changing the dataset-specific formatting functions in `utils.py`. 
-
-(2) Run ITI validation from the repo root, e.g., `python validation/validate_2fold.py --model_name llama_7B --num_heads 48 --alpha 15 --device 0 --num_fold 2 --use_center_of_mass --instruction_prompt default --sequential_loading` to test inference-time intervention on LLaMA-7B. The `--sequential_loading` flag enables memory optimization for single GPU usage.
-
-**Updated command examples (run from repo root):**
-```bash
-# Get activations for LLaMA-7B
-python get_activations/get_activations.py --model_name llama_7B --dataset_name tqa_mc2 --device 0
-
-# Run ITI validation with single 24GB GPU (recommended) 
-python validation/validate_2fold.py --model_name llama_7B --sequential_loading --device 0
-
-# Run ITI validation with multiple GPUs or disable memory optimization
-python validation/validate_2fold.py --model_name llama_7B --no-sequential_loading
-
-# Evaluate ITI baked-in model  
-python validation/validate_2fold.py --model_name llama_7B --model_prefix honest_ --num_heads 1 --alpha 0 --device 0
-```
-
-(3) To create a modified model with ITI use `python validation/edit_weight.py --model_name llama2_chat_7B` from the repo root. `python validation/push_hf.py` can be used to upload this model to HuggingFace.
-
-**_NOTE:_** 
-- **Memory Requirements**: With `--sequential_loading` (default), most models work with a single 24GB GPU. For `llama2_chat_70B`, you may still need multiple GPUs or use `--no-sequential_loading` and omit `CUDA_VISIBLE_DEVICES=0`.  
-- **Local Models**: It may be beneficial to save models locally first with `huggingface-cli download` and load with `--model_prefix "local_"` options, available in `get_activations.py`, `edit_weight.py` and `validate_2fold.py`.
-- **Legacy Support**: For the original ITI paper implementation, refer to the `legacy/` folder (if available).
-
-**_NOTE regarding pyvene:_** This repository uses pyvene, a convenient wrapper for intervening on attention heads, instead of the original baukit-based implementation. The scripts ``validate_2fold.py``, ``utils.py``, and ``get_activations.py`` use pyvene for better generalizability to other open-source models. Additionally, **HuggingFace judge models** replace the original GPT-3 evaluation system for improved accessibility and reduced costs.
 
 ### Results
 

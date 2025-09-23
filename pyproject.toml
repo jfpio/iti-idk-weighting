@@ -16,4 +16,8 @@ dependencies = [
     "torch>=2.8.0",
     "tqdm>=4.67.1",
     "transformers>=4.56.2",
+    "truthfulqa",
 ]
+
+[tool.uv.sources]
+truthfulqa = { git = "https://github.com/jfpio/TruthfulQA" }

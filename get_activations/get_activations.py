@@ -8,15 +8,16 @@ import pickle
 import sys
 sys.path.append('../')
 
-import llama
 import pickle
 import argparse
 from transformers import AutoTokenizer, AutoModel, AutoModelForCausalLM
 
 # Specific pyvene imports
-from utils import get_llama_activations_pyvene, tokenized_tqa, tokenized_tqa_gen, tokenized_tqa_gen_end_q
+from utils import get_llama_activations_pyvene, tokenized_tqa, tokenized_tqa_gen, tokenized_tqa_gen_end_q, resolve_device
 from interveners import wrapper, Collector, ITI_Intervener
 import pyvene as pv
+from dataset_utils.load_dataset import load_csv_as_mc2_dataset, load_csv_as_gen_dataset
+from dataset_utils.path_utils import get_default_dataset_path
 
 HF_NAMES = {
     # 'llama_7B': 'baffo32/decapoda-research-llama-7B-hf',
@@ -26,6 +27,8 @@ HF_NAMES = {
     'llama2_chat_7B': 'meta-llama/Llama-2-7b-chat-hf', 
     'llama2_chat_13B': 'meta-llama/Llama-2-13b-chat-hf', 
     'llama2_chat_70B': 'meta-llama/Llama-2-70b-chat-hf', 
+    'llama3_1B': 'meta-llama/Llama-3.2-1B',
+    'llama3_1B_instruct': 'meta-llama/Llama-3.2-1B-Instruct',
     'llama3_8B': 'meta-llama/Meta-Llama-3-8B',
     'llama3_8B_instruct': 'meta-llama/Meta-Llama-3-8B-Instruct',
     'llama3_70B': 'meta-llama/Meta-Llama-3-70B',
@@ -49,23 +52,30 @@ def main():
     model_name_or_path = HF_NAMES[args.model_prefix + args.model_name]
 
     tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
-    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, torch_dtype=torch.float16, device_map="auto")
-    device = "cuda"
+    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, low_cpu_mem_usage=True, dtype=torch.float16, device_map="auto")
+    device = resolve_device(args.device)
 
     if args.dataset_name == "tqa_mc2": 
-        dataset = load_dataset("truthfulqa/truthful_qa", "multiple_choice")['validation']
+        dataset = load_csv_as_mc2_dataset(get_default_dataset_path())
         formatter = tokenized_tqa
     elif args.dataset_name == "tqa_gen": 
-        dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
+        dataset = load_csv_as_gen_dataset(get_default_dataset_path())
         formatter = tokenized_tqa_gen
     elif args.dataset_name == 'tqa_gen_end_q': 
-        dataset = load_dataset("truthfulqa/truthful_qa", 'generation')['validation']
+        dataset = load_csv_as_gen_dataset(get_default_dataset_path())
         formatter = tokenized_tqa_gen_end_q
+    elif args.dataset_name == "subset_mc2":
+        dataset = load_csv_as_mc2_dataset("../datasets/subset_eval_100.csv")
+        formatter = tokenized_tqa
+    elif args.dataset_name == "subset_gen":
+        dataset = load_csv_as_gen_dataset("../datasets/subset_eval_100.csv")
+        formatter = tokenized_tqa_gen
+
     else: 
         raise ValueError("Invalid dataset name")
 
     print("Tokenizing prompts")
-    if args.dataset_name == "tqa_gen" or args.dataset_name == "tqa_gen_end_q": 
+    if args.dataset_name == "tqa_gen" or args.dataset_name == "tqa_gen_end_q" or args.dataset_name == "subset_gen": 
         prompts, labels, categories = formatter(dataset, tokenizer)
         with open(f'../features/{args.model_name}_{args.dataset_name}_categories.pkl', 'wb') as f:
             pickle.dump(categories, f)

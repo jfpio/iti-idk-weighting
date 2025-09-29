@@ -7,24 +7,22 @@ sys.path.insert(0, "TruthfulQA")
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# import llama
 from datasets import load_dataset
 from tqdm import tqdm
 import numpy as np
-# import llama
 import pandas as pd
 import warnings
 from einops import rearrange
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from baukit import Trace, TraceDict
-import sklearn
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 from sklearn.linear_model import LogisticRegression
 import pickle
 from functools import partial
+import gc
+from dataset_utils.load_dataset import load_csv_as_mc2_dataset
+
 
 from truthfulqa import utilities, models, metrics
-import openai
 from truthfulqa.configs import BEST_COL, ANSWER_COL, INCORRECT_COL
 
 ENGINE_MAP = {
@@ -46,11 +44,43 @@ from truthfulqa.utilities import (
     format_prompt_with_answer_strings,
     split_multi_answer,
     format_best,
-    find_start,
 )
 from truthfulqa.presets import preset_map, COMPARE_PRIMER
 from truthfulqa.models import find_subsequence, set_columns, MC_calcs
 from truthfulqa.evaluate import format_frame, data_to_dict
+
+
+def resolve_device(device_index: int | None = 0) -> torch.device:
+    """
+    Resolve the best available torch.device for this machine.
+    Preference order:
+    - CUDA (optionally using the provided device index)
+    - MPS (Apple Silicon)
+    - CPU
+    Args:
+        device_index: Optional CUDA device index to select when CUDA is available.
+    Returns:
+        torch.device: Selected device object (e.g., cuda:0, mps, or cpu).
+    """
+    try:
+        if torch.cuda.is_available():
+            # Respect a valid device index when provided
+            if (
+                device_index is not None
+                and isinstance(device_index, int)
+                and 0 <= device_index < torch.cuda.device_count()
+            ):
+                return torch.device(f"cuda:{device_index}")
+            return torch.device("cuda")
+    except Exception:
+        pass
+    # Apple Metal Performance Shaders (MPS)
+    try:
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+    except Exception:
+        pass
+    return torch.device("cpu")
 
 
 def load_nq():
@@ -156,24 +186,24 @@ def tokenized_tqa_gen(dataset, tokenizer):
     return all_prompts, all_labels, all_categories
 
 
-def get_llama_activations_bau(model, prompt, device): 
-    HEADS = [f"model.layers.{i}.self_attn.head_out" for i in range(model.config.num_hidden_layers)]
-    MLPS = [f"model.layers.{i}.mlp" for i in range(model.config.num_hidden_layers)]
+# def get_llama_activations_bau(model, prompt, device): 
+#     HEADS = [f"model.layers.{i}.self_attn.head_out" for i in range(model.config.num_hidden_layers)]
+#     MLPS = [f"model.layers.{i}.mlp" for i in range(model.config.num_hidden_layers)]
 
-    with torch.no_grad():
-        prompt = prompt.to(device)
-        with TraceDict(model, HEADS+MLPS) as ret:
-        # with TraceDict(model, HEADS+MLPS, retain_input=True) as ret:
-            output = model(prompt, output_hidden_states = True)
-        hidden_states = output.hidden_states
-        hidden_states = torch.stack(hidden_states, dim = 0).squeeze()
-        hidden_states = hidden_states.detach().cpu().numpy()
-        head_wise_hidden_states = [ret[head].output.squeeze().detach().cpu() for head in HEADS]
-        head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim = 0).squeeze().numpy()
-        mlp_wise_hidden_states = [ret[mlp].output.squeeze().detach().cpu() for mlp in MLPS]
-        mlp_wise_hidden_states = torch.stack(mlp_wise_hidden_states, dim = 0).squeeze().numpy()
+#     with torch.no_grad():
+#         prompt = prompt.to(device)
+#         with TraceDict(model, HEADS+MLPS) as ret:
+#         # with TraceDict(model, HEADS+MLPS, retain_input=True) as ret:
+#             output = model(prompt, output_hidden_states = True)
+#         hidden_states = output.hidden_states
+#         hidden_states = torch.stack(hidden_states, dim = 0).squeeze()
+#         hidden_states = hidden_states.detach().cpu().numpy()
+#         head_wise_hidden_states = [ret[head].output.squeeze().detach().cpu() for head in HEADS]
+#         head_wise_hidden_states = torch.stack(head_wise_hidden_states, dim = 0).squeeze().numpy()
+#         mlp_wise_hidden_states = [ret[mlp].output.squeeze().detach().cpu() for mlp in MLPS]
+#         mlp_wise_hidden_states = torch.stack(mlp_wise_hidden_states, dim = 0).squeeze().numpy()
 
-    return hidden_states, head_wise_hidden_states, mlp_wise_hidden_states
+#     return hidden_states, head_wise_hidden_states, mlp_wise_hidden_states
 
 def get_llama_activations_pyvene(collected_model, collectors, prompt, device):
     with torch.no_grad():
@@ -288,7 +318,7 @@ def tqa_run_answers(frame, engine, tag, preset, model=None, tokenizer=None, verb
 
             # --- intervention code --- #
 
-    if device:
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     return frame
@@ -418,22 +448,25 @@ def tqa_run_probs(frame, engine, tag, preset, model=None, tokenizer=None, verbos
 
                 MC_calcs(tag, frame, idx, scores_true, scores_false, ref_true, ref_best)
 
-    if device:
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
     return frame
 
 def run_ce_loss(model_key, model=None, tokenizer=None, device='cuda', interventions={}, intervention_fn=None, num_samples=100): 
 
-    # load owt text
+    # load C4 dataset from allenai/c4
     # note this is tokenized with llama tokenizer
-    dataset = load_dataset("stas/openwebtext-10k")['train']
-    dataset = dataset.shuffle()
-    dataset = dataset.select(range(num_samples))
+    dataset = load_dataset("allenai/c4", "en", split='train', streaming=True)
+    dataset = dataset.shuffle(seed=42)
 
-    # tokenize
-    owt = dataset.map(lambda x: {'input_ids': torch.tensor(tokenizer(x['text'], return_tensors='pt')['input_ids'][:,:128])})
-    owt.set_format(type='torch', columns=['input_ids'])
+    # collect num_samples samples from streaming dataset and tokenize
+    owt_samples = []
+    for i, sample in enumerate(dataset):
+        if i >= num_samples:
+            break
+        input_ids = torch.tensor(tokenizer(sample['text'], return_tensors='pt')['input_ids'][:,:128])
+        owt_samples.append({'input_ids': input_ids})
     
     # # define intervention
     # def id(head_output, layer_name):
@@ -447,11 +480,10 @@ def run_ce_loss(model_key, model=None, tokenizer=None, device='cuda', interventi
     #     intervention_fn = partial(intervention_fn, start_edit_location=0)
 
     losses = []
-    rand_idxs = np.random.choice(len(owt), num_samples, replace=False).tolist()
     with torch.no_grad(): 
-        for i in tqdm(rand_idxs, desc="run_ce_loss"):
+        for i in tqdm(range(len(owt_samples)), desc="run_ce_loss"):
 
-            input_ids = owt[i]['input_ids'][:, :128].to(device)
+            input_ids = owt_samples[i]['input_ids'][:, :128].to(device)
             
             # with TraceDict(model, layers_to_intervene, edit_output=intervention_fn) as ret:
             _, loss = model({'input_ids': input_ids, 'labels': input_ids})
@@ -465,15 +497,18 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
 
     assert 'llama' in model_key or 'alpaca' in model_key or 'vicuna' in model_key, 'model must be llama model'
 
-    # load owt text
+    # load C4 dataset from allenai/c4
     # note this is tokenized with llama tokenizer
-    dataset = load_dataset("stas/openwebtext-10k")['train']
-    dataset = dataset.shuffle()
-    dataset = dataset.select(range(num_samples))
+    dataset = load_dataset("allenai/c4", "en", split='train', streaming=True)
+    dataset = dataset.shuffle(seed=42)
 
-    # tokenize
-    owt = dataset.map(lambda x: {'input_ids': torch.tensor(tokenizer(x['text'], return_tensors='pt')['input_ids'][:,:128])})
-    owt.set_format(type='torch', columns=['input_ids'])
+    # collect num_samples samples from streaming dataset and tokenize
+    owt_samples = []
+    for i, sample in enumerate(dataset):
+        if i >= num_samples:
+            break
+        input_ids = torch.tensor(tokenizer(sample['text'], return_tensors='pt')['input_ids'][:,:128])
+        owt_samples.append({'input_ids': input_ids})
     
     # # define intervention
     # def id(head_output, layer_name):
@@ -487,7 +522,6 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
     #     intervention_fn = partial(intervention_fn, start_edit_location=0)
 
     kl_divs = []
-    rand_idxs = np.random.choice(len(owt), num_samples, replace=False).tolist()
 
     if separate_kl_device is not None: 
         # orig_model = AutoModelForCausalLM.from_pretrained(ENGINE_MAP[model_key], torch_dtype=torch.float16, low_cpu_mem_usage=True)
@@ -495,8 +529,8 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
 
     with torch.no_grad(): 
         epsilon = 1e-10  # Small value to avoid division by zero
-        for i in tqdm(rand_idxs, desc="run_kl_wrt_orig"):
-            input_ids = owt[i]['input_ids'][:, :128].to(device)
+        for i in tqdm(range(len(owt_samples)), desc="run_kl_wrt_orig"):
+            input_ids = owt_samples[i]['input_ids'][:, :128].to(device)
             if separate_kl_device is not None: 
                 orig_logits = orig_model(input_ids.to('cuda'))
                 orig_logits = orig_logits.logits.cpu().type(torch.float32)
@@ -519,7 +553,7 @@ def run_kl_wrt_orig(model_key, model=None, tokenizer=None, device='cuda', interv
 
     return np.mean(kl_divs)
 
-def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path, device='cpu', verbose=False, preset='qa', interventions={}, intervention_fn=None, cache_dir=None, separate_kl_device=None, orig_model=None, instruction_prompt="default", many_shot_prefix=None, judge_name=None, info_name=None): 
+def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path, device='cpu', verbose=False, preset='qa', interventions={}, intervention_fn=None, cache_dir=None, separate_kl_device=None, orig_model=None, instruction_prompt="default", many_shot_prefix=None, judge_name=None, info_name=None, sequential_loading=True, beta=None): 
     """
     Inputs:
     models: a dictionary of the form {model_name: model} where model is a HF transformer # TODO: doesn't work with models other than llama right now
@@ -529,16 +563,19 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
     summary_path: where to store metric summaries
     interventions: a dictionary of the form {layer_name: [(head, direction, projected_mean, projected_std)]}
     intervention_fn: a function that takes in a head output and a layer name and returns the intervened output
+    sequential_loading: if True, unload main models after answer generation to save memory for judge models
 
     Outputs a pd dataframe with summary values
     """
     questions = utilities.load_questions(filename=input_path)
-
-    print("ASSUMES OPENAI_API_KEY ENVIRONMENT VARIABLE IS SET")
-    import os
-    openai.api_key = os.environ.get('OPENAI_API_KEY')
+    # Store model names and tokenizers for potential cleanup
+    model_names_for_cleanup = list(models.keys())
+    loaded_tokenizers = {}
     
-    for mdl in models.keys(): 
+    # Store CE loss and KL divergence metrics per model for sequential loading
+    model_metrics = {}
+    
+    for mdl in list(models.keys()): 
 
         # gpt-3
         if mdl in ['ada', 'babbage', 'curie', 'davinci']:  # gpt-3 models
@@ -621,18 +658,8 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
                     utilities.save_questions(questions, output_path)
                 except Exception as err:
                     print(err)
-            elif metric in ['judge', 'info']:
-                try:
-                    if metric == 'judge':
-                        questions = metrics.run_end2end_GPT3(model_key, 'GPT-judge', judge_name, questions, info=False)
-                        utilities.save_questions(questions, output_path)
-                    else:
-                        questions = metrics.run_end2end_GPT3(model_key, 'GPT-info', info_name, questions, info=True)
-                        utilities.save_questions(questions, output_path)
-                except Exception as err:
-                    print(err)
             else:
-                warnings.warn("Metric {0} not known, skipping!".format(metric), stacklevel=2)
+                warnings.warn("Metric {0} not known or unsupported, skipping!".format(metric), stacklevel=2)
 
     # save all
     utilities.save_questions(questions, output_path)
@@ -644,7 +671,7 @@ def alt_tqa_evaluate(models, metric_names, input_path, output_path, summary_path
                                                     'level_1': 'Metric',
                                                     0: 'Value'})
 
-    # filter to most informative metrics
+    # filter to critical ITI metrics only (time optimization)
     results = results[results['Metric'].isin(['MC1', 'MC2',
                                               'bleu acc',
                                               'rouge1 acc',
@@ -742,13 +769,17 @@ def get_interventions_dict(top_heads, probes, tuning_activations, num_heads, use
         interventions[f"model.layers.{layer}.self_attn.head_out"] = sorted(interventions[f"model.layers.{layer}.self_attn.head_out"], key = lambda x: x[0])
     return interventions
 
-def get_separated_activations(labels, head_wise_activations): 
+def get_separated_activations(labels, head_wise_activations, dataset_name="tqa_mc2"): 
 
     # separate activations by question
-    dataset=load_dataset('truthful_qa', 'multiple_choice')['validation']
+    from dataset_utils.path_utils import get_dataset_path_for_name
+    csv_path = get_dataset_path_for_name(dataset_name)
+    dataset = load_csv_as_mc2_dataset(csv_path)
     actual_labels = []
+    actual_is_idk = []
     for i in range(len(dataset)):
         actual_labels.append(dataset[i]['mc2_targets']['labels'])
+        actual_is_idk.append(dataset[i]['mc2_targets']['is_idk'])
 
     idxs_to_split_at = np.cumsum([len(x) for x in actual_labels])        
 
@@ -762,21 +793,91 @@ def get_separated_activations(labels, head_wise_activations):
     assert separated_labels == actual_labels
 
     separated_head_wise_activations = np.split(head_wise_activations, idxs_to_split_at)
+    
+    # Create a FLAT is_idk mask that matches the flat labels array
+    # This is much simpler than nested structures
+    flat_is_idk = []
+    for i in range(len(dataset)):
+        question_labels = dataset[i]['mc2_targets']['labels']     # [1,1,1,0,0,0]
+        question_is_idk = dataset[i]['mc2_targets']['is_idk']     # [True,False,True] for correct answers only
+        
+        # Create is_idk flags for all answers (correct + incorrect)
+        idk_idx = 0
+        for label in question_labels:
+            if label == 1:  # correct answer
+                flat_is_idk.append(question_is_idk[idk_idx])
+                idk_idx += 1
+            else:  # incorrect answer  
+                flat_is_idk.append(False)  # incorrect answers are not IDK
+    
+    # Convert to numpy array for easier indexing
+    flat_is_idk = np.array(flat_is_idk)
 
-    return separated_head_wise_activations, separated_labels, idxs_to_split_at
+    return separated_head_wise_activations, separated_labels, flat_is_idk, idxs_to_split_at
 
-def get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels): 
-
+def get_com_directions(num_layers, num_heads, train_set_idxs, val_set_idxs, separated_head_wise_activations, separated_labels, flat_is_idk=None, beta=1.0): 
+    """
+    Compute center-of-mass directions with IDK weighting.
+    
+    Args:
+        beta: Weight for IDK examples (TRUE examples always have weight=1.0)
+              beta=0 → TRUE-only, beta=1 → original, beta>1 → IDK-emphasized
+        flat_is_idk: Flat array of IDK classification matching the flat labels (optional)
+    """
     com_directions = []
 
-    for layer in tqdm(range(num_layers), desc="get_com_directions"): 
+    for layer in tqdm(range(num_layers), desc=f"get_com_directions (β={beta})"): 
         for head in range(num_heads): 
             usable_idxs = np.concatenate([train_set_idxs, val_set_idxs], axis=0)
             usable_head_wise_activations = np.concatenate([separated_head_wise_activations[i][:,layer,head,:] for i in usable_idxs], axis=0)
             usable_labels = np.concatenate([separated_labels[i] for i in usable_idxs], axis=0)
-            true_mass_mean = np.mean(usable_head_wise_activations[usable_labels == 1], axis=0)
-            false_mass_mean = np.mean(usable_head_wise_activations[usable_labels == 0], axis=0)
+            
+            # Get positive and negative activations
+            positive_mask = usable_labels == 1
+            negative_mask = usable_labels == 0
+            
+            positive_activations = usable_head_wise_activations[positive_mask]
+            negative_activations = usable_head_wise_activations[negative_mask]
+            
+            # Apply IDK weighting if metadata available
+            if flat_is_idk is not None:
+                # Get the flat indices for usable data
+                # We need to map from question indices to flat answer indices
+                flat_indices = []
+                cumsum = np.insert(np.cumsum([len(separated_labels[i]) for i in range(len(separated_labels))]), 0, 0)
+                for idx in usable_idxs:
+                    start = cumsum[idx]
+                    end = cumsum[idx + 1]
+                    flat_indices.extend(range(start, end))
+                
+                # Get is_idk flags for usable data
+                usable_is_idk = flat_is_idk[flat_indices]
+                positive_is_idk = usable_is_idk[positive_mask]
+                
+                # Print IDK statistics for testing (only for first layer-head combination to avoid spam)
+                if layer == 0 and head == 0:
+                    num_positive = len(positive_is_idk)
+                    num_idk = np.sum(positive_is_idk)
+                    num_true = num_positive - num_idk
+                    print(f"IDK Classification Stats (β={beta}): {num_idk} IDK + {num_true} TRUE = {num_positive} total positive examples")
+                
+                # Compute weights for positive examples: TRUE=1.0, IDK=β
+                positive_weights = np.array([beta if is_idk else 1.0 for is_idk in positive_is_idk])
+                
+                # Handle edge case: β=0 might create empty positive set
+                if np.sum(positive_weights) == 0:
+                    # Fallback: use tiny weight instead of zero
+                    positive_weights = np.array([1e-6 if is_idk else 1.0 for is_idk in positive_is_idk])
+                
+                # Weighted center-of-mass
+                true_mass_mean = np.average(positive_activations, axis=0, weights=positive_weights)
+            else:
+                # Original unweighted approach
+                true_mass_mean = np.mean(positive_activations, axis=0)
+            
+            false_mass_mean = np.mean(negative_activations, axis=0)
             com_directions.append(true_mass_mean - false_mass_mean)
+            
     com_directions = np.array(com_directions)
 
     return com_directions

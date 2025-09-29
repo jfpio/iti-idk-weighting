@@ -1,3 +1,25 @@
+### @jfpio Update 09/29/2025
+- Added **β-weighting for IDK** in the ITI **positive-class mean** (COM).  
+- Install flow now uses `uv`
+- Updated version of **TruthfulQA** is installed from git via `uv`
+- **Judging**: replaced obsolete GPT-based judges with **Hugging Face LLaMA-2 judges**:
+  - **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B`
+  - **Info Judge**:  `allenai/truthfulqa-info-judge-llama2-7B`
+  - **Results write-up**: Work-In-Progress
+
+#### Updated installation
+```
+uv sync
+mkdir -p validation/results_dump/answer_dump
+mkdir -p validation/results_dump/assesed_dump
+mkdir -p validation/results_dump/summary_dump
+mkdir -p validation/results_dump/edited_models_dump
+mkdir validation/splits
+mkdir validation/sweeping/logs
+mkdir get_activations/logs
+mkdir features
+```
+
 ### Update 08/24/2024
 With the release of LLaMA-3 models, I decided to replicate ITI on a suite of LLaMA models for easy comparison. I've recorded the results in `iti_replication_results.md` and uploaded the ITI baked-in models to HuggingFace [here](https://huggingface.co/collections/jujipotle/inference-time-intervention-iti-models-66ca15448347e21e8af6772e). Note that the ITI baked-in models and ITI applied to base models is not exactly a one-to-one comparison due to slight differences in when the activations are edited. The ITI baked-in models have the activation differences hardcoded into their attention biases. For more precise editing, consider only using the models' attention biases when processing tokens after the input prompt, to be more faithful to the original ITI method.
 
@@ -136,3 +158,12 @@ The modified nq_open and trivia_qa datasets used for transfer evaluation are ava
   year={2024}
 }
 ```
+
+
+
+This repository now uses **HuggingFace TruthfulQA judge models** instead of deprecated GPT-3 evaluation. The evaluation process is **fully automated** and **no longer requires OpenAI API keys**.
+
+The code automatically uses these pre-trained judge models:
+- **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B` 
+- **Info Judge**: `allenai/truthfulqa-info-judge-llama2-7B`
+

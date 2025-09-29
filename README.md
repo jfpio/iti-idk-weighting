@@ -1,5 +1,5 @@
 ### @jfpio Update 09/29/2025
-- Added **β-weighting for IDK** in the ITI **positive-class mean** (COM).  
+- Added **β-weighting for I Don't Know (IDK)** in the ITI **positive-class mean** (COM).  
 - Install flow now uses `uv`
 - Updated version of **TruthfulQA** is installed from git via `uv`
 - **Judging**: replaced obsolete GPT-based judges with **Hugging Face LLaMA-2 judges**:

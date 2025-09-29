@@ -1,3 +1,25 @@
+### @jfpio Update 09/29/2025
+- Added **β-weighting for IDK** in the ITI **positive-class mean** (COM).  
+- Install flow now uses `uv`
+- Updated version of **TruthfulQA** is installed from git via `uv`
+- **Judging**: replaced obsolete GPT-based judges with **Hugging Face LLaMA-2 judges**:
+  - **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B`
+  - **Info Judge**:  `allenai/truthfulqa-info-judge-llama2-7B`
+  - **Results write-up**: Work-In-Progress
+
+#### Updated installation
+```
+uv sync
+mkdir -p validation/results_dump/answer_dump
+mkdir -p validation/results_dump/assesed_dump
+mkdir -p validation/results_dump/summary_dump
+mkdir -p validation/results_dump/edited_models_dump
+mkdir validation/splits
+mkdir validation/sweeping/logs
+mkdir get_activations/logs
+mkdir features
+```
+
 ### Update 08/24/2024
 With the release of LLaMA-3 models, I decided to replicate ITI on a suite of LLaMA models for easy comparison. I've recorded the results in `iti_replication_results.md` and uploaded the ITI baked-in models to HuggingFace [here](https://huggingface.co/collections/jujipotle/inference-time-intervention-iti-models-66ca15448347e21e8af6772e). Note that the ITI baked-in models and ITI applied to base models is not exactly a one-to-one comparison due to slight differences in when the activations are edited. The ITI baked-in models have the activation differences hardcoded into their attention biases. For more precise editing, consider only using the models' attention biases when processing tokens after the input prompt, to be more faithful to the original ITI method.
 
@@ -19,7 +41,7 @@ import pyvene as pv
 tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-2-7b-chat-hf")
 model = AutoModelForCausalLM.from_pretrained(
     "meta-llama/Llama-2-7b-chat-hf",
-    dtype=torch.bfloat16,
+    torch_dtype=torch.bfloat16,
 ).to("cuda")
 
 pv_model = pv.IntervenableModel.load(
@@ -52,7 +74,7 @@ from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM
 
 model_name_new = "likenneth/honest_llama2_chat_7B"
 tokenizer_new = AutoTokenizer.from_pretrained(model_name_new, trust_remote_code=True)
-model_new = AutoModelForCausalLM.from_pretrained(model_name_new, low_cpu_mem_usage = True, dtype=torch.float16, trust_remote_code=True)
+model_new = AutoModelForCausalLM.from_pretrained(model_name_new, low_cpu_mem_usage = True, torch_dtype=torch.float16, trust_remote_code=True)
 _ = model_new.cuda()
 
 q = "I ate a cherry seed. Will a cherry tree grow in my stomach?"
@@ -83,6 +105,9 @@ Some of the code is from [user-friendly llama](https://github.com/ypeleg/llama),
 ## Installation
 In the root folder of this repo, run the following commands to set things up.
 ```
+conda env create -f environment.yaml
+conda activate iti
+python -m ipykernel install --user --name iti --display-name "iti"
 mkdir -p validation/results_dump/answer_dump
 mkdir -p validation/results_dump/summary_dump
 mkdir -p validation/results_dump/edited_models_dump
@@ -90,16 +115,29 @@ mkdir validation/splits
 mkdir validation/sweeping/logs
 mkdir get_activations/logs
 mkdir features
-pip install -r requirements.txt
+git clone https://github.com/sylinrl/TruthfulQA.git
 ```
 
 ## TruthfulQA Evaluation
 
-This repository now uses **HuggingFace TruthfulQA judge models** instead of deprecated GPT-3 evaluation. The evaluation process is **fully automated** and **no longer requires OpenAI API keys**.
+Since we need to evaluate using TruthfulQA API, you should first export your OpenAI API key as an environment variable. Then install following [their instructions](https://github.com/sylinrl/TruthfulQA) to the iti environment. Some pip packages installed via TruthfulQA are outdated; important ones to update are datasets, transformers, einops.
 
-The code automatically uses these pre-trained judge models:
-- **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B` 
-- **Info Judge**: `allenai/truthfulqa-info-judge-llama2-7B`
+
+Next, you need to obtain GPT-judge and GPT-info models by finetuning on the TruthfulQA dataset. Run finetune_gpt.ipynb using your own OpenAI API key.
+
+If successful, you can find your GPT-judge and GPT-info model names with the Python command `models = client.models.list()`. They should be strings starting with `ft:davinci-002:...:truthful` and `ft:davinci-002:...:informative`.
+
+## Workflow
+
+(1) Get activations by running `bash get_activations.sh` (or `sweep_acitvations.sh` to get activations for multiple models at once). Layer-wise and head-wise activations are stored in the `features` folder. Prompts can be modified by changing the dataset-specific formatting functions in `utils.py`. 
+
+(2) Get into `validation` folder, then, e.g., `CUDA_VISIBLE_DEVICES=0 python validate_2fold.py --model_name llama_7B --num_heads 48 --alpha 15 --device 0 --num_fold 2 --use_center_of_mass --instruction_prompt default --judge_name <your GPT-judge name> --info_name <your GPT-info name>` to test inference-time intervention on LLaMA-7B. Read the code to learn about additional options. Or `CUDA_VISIBLE_DEVICES=0 python sweep_validate.py --model_name llama_7B --model_prefix honest_ --num_heads 1 --alpha 0...` to evaluate on an ITI baked-in LLaMA-7B model.
+
+(3) To create a modified model with ITI use `python edit_weight.py --model_name llama2_chat_7B` in the `validation` folder. `push_hf.py` can be used to upload this model to Huging Face.
+
+**_NOTE:_** For a large model like `llama2_chat_70B` you may need to use multiple GPUs, so omit `CUDA_VISIBLE_DEVICES=0`. In addition, it may be beneficial to save the model locally first with `huggingface-cli download` and load with `--model_prefix "local_"` options, available in `get_activations.py`, `edit_weight.py` and `validate_2fold.py`.
+
+**_NOTE regarding pyvene:_** This repository was updated on 09/29/2024 to implement ITI using pyvene, a convenient wrapper for intervening on attention heads. The scripts ``validate_2fold.py``, ``utils.py``, and ``get_activations.py`` have been updated to use pyvene instead of the legacy intervention code, which relied on baukit's TraceDict for attention head intervention. While both pyvene and baukit achieve similar results, pyvene offers greater generalizability to other open-source models. If you wish to replicate the original *Inference-Time Intervention* paper, the legacy scripts may be more appropriate. These legacy scripts are provided in the ``legacy`` folder, allowing you to choose the approach that best fits your needs.
 
 ### Results
 
@@ -120,3 +158,12 @@ The modified nq_open and trivia_qa datasets used for transfer evaluation are ava
   year={2024}
 }
 ```
+
+
+
+This repository now uses **HuggingFace TruthfulQA judge models** instead of deprecated GPT-3 evaluation. The evaluation process is **fully automated** and **no longer requires OpenAI API keys**.
+
+The code automatically uses these pre-trained judge models:
+- **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B` 
+- **Info Judge**: `allenai/truthfulqa-info-judge-llama2-7B`
+

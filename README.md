@@ -20,6 +20,9 @@ mkdir get_activations/logs
 mkdir features
 ```
 
+#### Reproducing results
+To reproduce results one can use `reproduce_results.sh`. There are all sufficient information how to use this updated repo.
+
 ### Update 08/24/2024
 With the release of LLaMA-3 models, I decided to replicate ITI on a suite of LLaMA models for easy comparison. I've recorded the results in `iti_replication_results.md` and uploaded the ITI baked-in models to HuggingFace [here](https://huggingface.co/collections/jujipotle/inference-time-intervention-iti-models-66ca15448347e21e8af6772e). Note that the ITI baked-in models and ITI applied to base models is not exactly a one-to-one comparison due to slight differences in when the activations are edited. The ITI baked-in models have the activation differences hardcoded into their attention biases. For more precise editing, consider only using the models' attention biases when processing tokens after the input prompt, to be more faithful to the original ITI method.
 

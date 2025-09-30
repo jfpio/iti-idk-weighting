@@ -5,7 +5,7 @@
 - **Judging**: replaced obsolete GPT-based judges with **Hugging Face LLaMA-2 judges**:
   - **Truth Judge**: `allenai/truthfulqa-truth-judge-llama2-7B`
   - **Info Judge**:  `allenai/truthfulqa-info-judge-llama2-7B`
-  - **Results write-up**: Work-In-Progress
+  - **Results write-up**: [Blog Post "Tuning “I Don’t Know” at Inference Time - What β Really Buys You (and What It Costs)"](https://jfpio.github.io/blog/2025/does-adding-i-dont-know-to-positive-steering-help/)
 
 #### Updated installation
 ```
